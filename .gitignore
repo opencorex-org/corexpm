@@ -1,0 +1,10 @@
+/target/
+/.corex/
+/node_modules/
+*.log
+.DS_Store
+.idea/
+.vscode/
+coverage/
+dist/
+
