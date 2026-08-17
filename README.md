@@ -64,6 +64,8 @@ Start with the [documentation index](docs/README.md) and the
 [architecture overview](docs/architecture/overview.md). The complete visual
 design is in the [architecture diagram pack](docs/architecture/diagrams/README.md),
 with the detailed [`node_modules` size-reduction plan](docs/architecture/node-modules-size-reduction.md).
+See the evidence-based [package-manager comparison](docs/comparisons/package-managers.md)
+for npm, pnpm, Yarn Modern, Bun, and CorexPM.
 
 ## Repository layout
 

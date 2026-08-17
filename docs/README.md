@@ -24,6 +24,7 @@ a bug and resolve it explicitly.
 - [Workspaces](architecture/workspaces.md)
 - [Crate map](architecture/crate-map.md)
 - [npm compatibility](compatibility/npm-compatibility.md)
+- [Package-manager comparison](comparisons/package-managers.md)
 - [Threat model](security/threat-model.md)
 - [Testing strategy](testing/strategy.md)
 
