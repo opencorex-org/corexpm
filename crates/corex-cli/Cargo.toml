@@ -1,0 +1,20 @@
+[package]
+name = "corex-cli"
+description = "Command-line interface for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "corexpm"
+path = "src/main.rs"
+
+[dependencies]
+corex-core = { path = "../corex-core" }
+corex-errors = { path = "../corex-errors" }
+
+[lints]
+workspace = true
+

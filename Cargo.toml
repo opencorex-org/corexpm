@@ -1,0 +1,27 @@
+[workspace]
+members = [
+  "crates/corex-cli",
+  "crates/corex-config",
+  "crates/corex-core",
+  "crates/corex-errors",
+  "crates/corex-manifest",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/opencorex-org/corexpm"
+homepage = "https://github.com/opencorex-org/corexpm"
+authors = ["OpenCorex contributors"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+

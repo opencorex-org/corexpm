@@ -1,0 +1,10 @@
+# CorexPM's own workspace dogfood configuration.
+[workspace]
+packages = ["packages/*", "apps/*"]
+
+[install]
+linker = "isolated"
+
+[scripts]
+default = "deny"
+

@@ -1,0 +1,16 @@
+[package]
+name = "corex-core"
+description = "Application orchestration layer for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-config = { path = "../corex-config" }
+corex-errors = { path = "../corex-errors" }
+
+[lints]
+workspace = true
+
