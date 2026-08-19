@@ -4,7 +4,7 @@ use corex_errors::{Diagnostic, ErrorFamily};
 use std::collections::BTreeMap;
 
 /// A package name, including optional npm scope.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PackageName(String);
 
 impl PackageName {

@@ -1,6 +1,8 @@
 //! `CorexPM` application orchestration.
 
 use corex_config::ProjectConfig;
+use corex_graph::DependencyGraph;
+use corex_registry::{MockRegistryClient, RegistryPackageMetadata};
 
 /// Build-time version exposed by the CLI and diagnostic reports.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -80,4 +82,50 @@ pub fn doctor_info() -> DoctorInfo {
 #[must_use]
 pub fn doctor_report() -> String {
     doctor_info().to_string()
+}
+
+/// Resolves a package.json content to a resolved dependency graph.
+///
+/// # Errors
+///
+/// Returns a [`Diagnostic`] when parsing the manifest, loading mock registry metadata,
+/// or resolving dependencies fails.
+pub fn resolve_manifest(
+    manifest_content: &str,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+) -> Result<DependencyGraph, corex_errors::Diagnostic> {
+    use corex_manifest::PackageManifest;
+    use corex_registry::MockRegistryClient;
+    use corex_resolver::DependencyResolver;
+
+    let manifest = PackageManifest::parse_json(manifest_content)?;
+    let client = MockRegistryClient::new(fixtures_dir);
+    let resolver = DependencyResolver::new(&client, &context.config);
+    resolver.resolve(&manifest)
+}
+
+/// Fetches registry package metadata for the given package name.
+///
+/// # Errors
+///
+/// Returns a [`Diagnostic`] when the package name is invalid or the metadata is not found.
+pub fn fetch_package_info(
+    package_name: &str,
+    fixtures_dir: &std::path::Path,
+) -> Result<RegistryPackageMetadata, corex_errors::Diagnostic> {
+    use corex_errors::ErrorFamily;
+    use corex_manifest::PackageName;
+    use corex_registry::RegistryClient;
+
+    let name = PackageName::parse(package_name).map_err(|_| {
+        corex_errors::Diagnostic::new(
+            ErrorFamily::Registry,
+            4,
+            format!("invalid package name `{package_name}`"),
+        )
+    })?;
+
+    let client = MockRegistryClient::new(fixtures_dir);
+    client.fetch_metadata(&name)
 }

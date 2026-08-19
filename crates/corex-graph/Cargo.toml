@@ -1,6 +1,6 @@
 [package]
-name = "corex-core"
-description = "Application orchestration layer for CorexPM"
+name = "corex-graph"
+description = "Compact resolved dependency graph for CorexPM"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,17 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-corex-config = { path = "../corex-config" }
 corex-errors = { path = "../corex-errors" }
 corex-manifest = { path = "../corex-manifest" }
 corex-semver = { path = "../corex-semver" }
-corex-graph = { path = "../corex-graph" }
-corex-registry = { path = "../corex-registry" }
-corex-resolver = { path = "../corex-resolver" }
 serde = { workspace = true }
 
 
 [lints]
 workspace = true
-
-

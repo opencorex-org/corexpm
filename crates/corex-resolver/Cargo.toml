@@ -1,29 +1,20 @@
 [package]
-name = "corex-cli"
-description = "Command-line interface for CorexPM"
+name = "corex-resolver"
+description = "Dependency resolver algorithm for CorexPM"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "corexpm"
-path = "src/main.rs"
-
 [dependencies]
-corex-core = { path = "../corex-core" }
 corex-errors = { path = "../corex-errors" }
+corex-manifest = { path = "../corex-manifest" }
 corex-config = { path = "../corex-config" }
-corex-registry = { path = "../corex-registry" }
 corex-semver = { path = "../corex-semver" }
 corex-graph = { path = "../corex-graph" }
-corex-resolver = { path = "../corex-resolver" }
+corex-registry = { path = "../corex-registry" }
 serde = { workspace = true }
-serde_json = { workspace = true }
-
 
 [lints]
 workspace = true
-
-
