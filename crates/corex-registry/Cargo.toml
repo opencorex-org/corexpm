@@ -1,0 +1,18 @@
+[package]
+name = "corex-registry"
+description = "Registry client abstraction and mock implementation for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+corex-manifest = { path = "../corex-manifest" }
+corex-semver = { path = "../corex-semver" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
