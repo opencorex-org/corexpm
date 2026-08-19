@@ -15,8 +15,13 @@ path = "src/main.rs"
 corex-core = { path = "../corex-core" }
 corex-errors = { path = "../corex-errors" }
 corex-config = { path = "../corex-config" }
+corex-registry = { path = "../corex-registry" }
+corex-semver = { path = "../corex-semver" }
+corex-graph = { path = "../corex-graph" }
+corex-resolver = { path = "../corex-resolver" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
 
 [lints]
 workspace = true
