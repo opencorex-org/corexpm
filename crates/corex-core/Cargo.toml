@@ -15,6 +15,9 @@ corex-semver = { path = "../corex-semver" }
 corex-graph = { path = "../corex-graph" }
 corex-registry = { path = "../corex-registry" }
 corex-resolver = { path = "../corex-resolver" }
+corex-store = { path = "../corex-store" }
+corex-cache = { path = "../corex-cache" }
+corex-fetch = { path = "../corex-fetch" }
 serde = { workspace = true }
 
 

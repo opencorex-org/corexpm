@@ -9,6 +9,9 @@ members = [
   "crates/corex-graph",
   "crates/corex-registry",
   "crates/corex-resolver",
+  "crates/corex-fetch",
+  "crates/corex-cache",
+  "crates/corex-store",
 ]
 resolver = "2"
 
@@ -34,5 +37,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 js-semver = "0.3"
+tar = "0.4"
+flate2 = "1.0"
+sha2 = "0.10"
+tempfile = "3.10"
 
 
