@@ -9,6 +9,10 @@ dependencies = [
  "corex-config",
  "corex-core",
  "corex-errors",
+ "corex-graph",
+ "corex-registry",
+ "corex-resolver",
+ "corex-semver",
  "serde",
  "serde_json",
 ]
@@ -28,6 +32,11 @@ version = "0.1.0"
 dependencies = [
  "corex-config",
  "corex-errors",
+ "corex-graph",
+ "corex-manifest",
+ "corex-registry",
+ "corex-resolver",
+ "corex-semver",
  "serde",
 ]
 
@@ -39,12 +48,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "corex-graph"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "corex-manifest",
+ "corex-semver",
+ "serde",
+]
+
+[[package]]
 name = "corex-manifest"
 version = "0.1.0"
 dependencies = [
  "corex-errors",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "corex-registry"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "corex-manifest",
+ "corex-semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "corex-resolver"
+version = "0.1.0"
+dependencies = [
+ "corex-config",
+ "corex-errors",
+ "corex-graph",
+ "corex-manifest",
+ "corex-registry",
+ "corex-semver",
+ "serde",
+]
+
+[[package]]
+name = "corex-semver"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "js-semver",
+ "serde",
 ]
 
 [[package]]
@@ -74,6 +126,12 @@ name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+
+[[package]]
+name = "js-semver"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a86e374f16219dbd32d4044d3b27200c2064043e40f0e6d4aa7fa7b047c5958"
 
 [[package]]
 name = "memchr"
