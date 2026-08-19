@@ -12,10 +12,10 @@ reviewable before installer code hardens them accidentally.
 - [x] Rust workspace and dependency-free bootstrap CLI
 - [x] product scope, architecture, security, testing, and governance docs
 - [x] ADR/RFC process and automation templates
-- [ ] configuration discovery and precedence
-- [ ] `package.json` parser with fixtures and structured errors
-- [ ] machine-readable CLI output contract
-- [ ] supported platform tier policy
+- [x] configuration discovery and precedence
+- [x] `package.json` parser with fixtures and structured errors
+- [x] machine-readable CLI output contract
+- [x] supported platform tier policy
 
 Exit: contributors can build and test locally; foundational open questions have
 owners or RFCs; `corexpm --help`, `--version`, and `doctor` are reliable.
