@@ -22,11 +22,11 @@ owners or RFCs; `corexpm --help`, `--version`, and `doctor` are reliable.
 
 ## Phase 1 — registry and resolver (`0.2`)
 
-- npm metadata client with caching, authentication redaction, and mock registry
-- npm-compatible semantic version range suite
-- typed dependency graph and deterministic candidate selection
-- transitive, development, optional, peer, OS, and CPU dependencies
-- `corexpm info`, resolution diagnostics, and initial `why`
+- [x] npm metadata client with caching, authentication redaction, and mock registry
+- [x] npm-compatible semantic version range suite
+- [x] typed dependency graph and deterministic candidate selection
+- [x] transitive, development, optional, peer, OS, and CPU dependencies
+- [x] `corexpm info`, resolution diagnostics, and initial `why`
 
 Exit: a manifest resolves reproducibly to a verified in-memory graph across the
 compatibility fixture corpus; no package content is installed yet.
