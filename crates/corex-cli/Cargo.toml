@@ -14,7 +14,11 @@ path = "src/main.rs"
 [dependencies]
 corex-core = { path = "../corex-core" }
 corex-errors = { path = "../corex-errors" }
+corex-config = { path = "../corex-config" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
+
 

@@ -4,7 +4,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 /// Broad diagnostic families. Codes are part of the public support contract.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 pub enum ErrorFamily {
     /// Registry communication or metadata errors.
     Registry,
@@ -50,6 +50,20 @@ pub struct Diagnostic {
     help: Option<String>,
 }
 
+impl serde::Serialize for Diagnostic {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("Diagnostic", 3)?;
+        state.serialize_field("code", &self.code())?;
+        state.serialize_field("message", &self.message)?;
+        state.serialize_field("help", &self.help)?;
+        state.end()
+    }
+}
+
 impl Diagnostic {
     /// Creates a diagnostic with a stable numeric code within its family.
     #[must_use]
@@ -73,6 +87,18 @@ impl Diagnostic {
     #[must_use]
     pub fn code(&self) -> String {
         format!("{}{:04}", self.family.prefix(), self.number)
+    }
+
+    /// Returns the diagnostic message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the help text, if any.
+    #[must_use]
+    pub fn help(&self) -> Option<&str> {
+        self.help.as_deref()
     }
 }
 

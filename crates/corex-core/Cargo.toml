@@ -10,7 +10,9 @@ repository.workspace = true
 [dependencies]
 corex-config = { path = "../corex-config" }
 corex-errors = { path = "../corex-errors" }
+serde = { workspace = true }
 
 [lints]
 workspace = true
+
 
