@@ -1,0 +1,13 @@
+{
+  "name": "platform-pkg",
+  "versions": {
+    "1.0.0": {
+      "version": "1.0.0",
+      "os": ["darwin"],
+      "dist": {
+        "tarball": "https://registry.npmjs.org/platform-pkg/-/platform-pkg-1.0.0.tgz",
+        "integrity": "sha512-platform"
+      }
+    }
+  }
+}
