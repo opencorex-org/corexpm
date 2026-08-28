@@ -19,12 +19,15 @@ mod tests {
     use std::path::PathBuf;
 
     fn create_temp_dir() -> PathBuf {
-        let mut dir = std::env::temp_dir();
-        let num = std::time::SystemTime::now()
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_nanos();
-        dir.push(format!("corex_ws_test_{num}"));
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("corex_ws_test_{pid}_{nanos}_{count}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
