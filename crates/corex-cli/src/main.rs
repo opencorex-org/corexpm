@@ -574,6 +574,110 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(None)
             }
         }
+        "trust" => {
+            let sub = command_args.first().map_or("list", String::as_str);
+            let target_pkg = command_args.get(1);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            match sub {
+                "approve" => {
+                    let pkg = target_pkg.ok_or_else(|| {
+                        Diagnostic::new(
+                            ErrorFamily::Cli,
+                            1,
+                            "missing package name for `trust approve`",
+                        )
+                        .with_help("Usage: corexpm trust approve <package-name>")
+                    })?;
+                    corex_core::approve_trust(&project_root, pkg)?;
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "approved": pkg }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Approved dependency script execution for `{pkg}`");
+                        Ok(None)
+                    }
+                }
+                "deny" => {
+                    let pkg = target_pkg.ok_or_else(|| {
+                        Diagnostic::new(
+                            ErrorFamily::Cli,
+                            1,
+                            "missing package name for `trust deny`",
+                        )
+                        .with_help("Usage: corexpm trust deny <package-name>")
+                    })?;
+                    corex_core::deny_trust(&project_root, pkg)?;
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "denied": pkg }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Denied dependency script execution for `{pkg}`");
+                        Ok(None)
+                    }
+                }
+                "list" => {
+                    let store = corex_core::list_trust(&project_root)?;
+                    if json {
+                        let output = CliOutput::Success { data: store };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Trusted Packages:");
+                        for (pkg, decision) in &store.packages {
+                            println!("  {pkg}: {decision:?}");
+                        }
+                        Ok(None)
+                    }
+                }
+                _ => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    3,
+                    format!("unknown trust subcommand `{sub}`"),
+                )
+                .with_help("supported trust subcommands: approve, deny, list")),
+            }
+        }
+        "permissions" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let report =
+                corex_core::get_permissions_report(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: report };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Corex Guard Effective Policy:");
+                for entry in &report.entries {
+                    println!(
+                        "  {:20} => {:?} ({})",
+                        entry.package_name, entry.effective_action, entry.policy_source
+                    );
+                    println!("    {}", entry.explanation);
+                }
+                Ok(None)
+            }
+        }
         "run" => {
             let script_arg = command_args.first().ok_or_else(|| {
                 Diagnostic::new(ErrorFamily::Cli, 1, "missing script name for `run` command")
@@ -588,18 +692,22 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 )
             })?;
 
-            let cmd_str = corex_core::run_script(&project_root, script_arg)?;
+            let result = corex_core::run_project_script(&project_root, script_arg)?;
 
             if json {
-                let output = CliOutput::Success {
-                    data: serde_json::json!({
-                        "script": script_arg,
-                        "command": cmd_str,
-                    }),
-                };
+                let output = CliOutput::Success { data: result };
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
-                println!("Running script `{script_arg}`: {cmd_str}");
+                println!(
+                    "Executed script `{script_arg}` in {}ms (success: {})",
+                    result.duration_ms, result.success
+                );
+                if !result.stdout.is_empty() {
+                    println!("{}", result.stdout);
+                }
+                if !result.stderr.is_empty() {
+                    eprintln!("{}", result.stderr);
+                }
                 Ok(None)
             }
         }
