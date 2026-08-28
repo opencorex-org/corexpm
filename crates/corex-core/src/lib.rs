@@ -448,3 +448,70 @@ pub fn run_project_script(
     let executor = corex_scripts::ScriptExecutor::new();
     executor.execute_script(project_root, project_root, "root", script_name, &cmd_str)
 }
+
+/// Discovers and lists workspace packages and metadata.
+///
+/// # Errors
+/// Returns `Diagnostic` if workspace discovery fails.
+pub fn list_workspace_members(
+    start_dir: &std::path::Path,
+) -> Result<corex_workspace::WorkspaceMetadata, corex_errors::Diagnostic> {
+    let discovery = corex_workspace::WorkspaceDiscovery::new();
+    discovery.discover(start_dir)
+}
+
+/// Lists workspace packages changed from git status or explicit file path list.
+///
+/// # Errors
+/// Returns `Diagnostic` if workspace discovery or graph building fails.
+pub fn list_changed_packages(
+    start_dir: &std::path::Path,
+    paths: Option<&[std::path::PathBuf]>,
+) -> Result<std::collections::BTreeSet<String>, corex_errors::Diagnostic> {
+    let discovery = corex_workspace::WorkspaceDiscovery::new();
+    let metadata = discovery.discover(start_dir)?;
+    let graph = corex_workspace::WorkspaceGraph::build(&metadata)?;
+    let calculator = corex_workspace::WorkspaceChanged::new();
+
+    let changed_paths = if let Some(p) = paths {
+        p.to_vec()
+    } else {
+        calculator.detect_git_changed_paths(&metadata.root_dir)?
+    };
+
+    Ok(calculator.calculate_changed(&graph, &metadata.root_dir, &changed_paths))
+}
+
+/// Executes workspace script across target packages adhering to topological wave order.
+///
+/// # Errors
+/// Returns `Diagnostic` if discovery, filtering, or task execution fails.
+pub fn run_workspace_script(
+    start_dir: &std::path::Path,
+    script_name: &str,
+    filter: &corex_workspace::WorkspaceFilter,
+    options: &corex_workspace::TaskSchedulerOptions,
+    changed_only: bool,
+    affected_only: bool,
+) -> Result<corex_workspace::TaskExecutionSummary, corex_errors::Diagnostic> {
+    let discovery = corex_workspace::WorkspaceDiscovery::new();
+    let metadata = discovery.discover(start_dir)?;
+    let graph = corex_workspace::WorkspaceGraph::build(&metadata)?;
+    let calculator = corex_workspace::WorkspaceChanged::new();
+
+    let base_set = if changed_only || affected_only {
+        let paths = calculator.detect_git_changed_paths(&metadata.root_dir)?;
+        let changed = calculator.calculate_changed(&graph, &metadata.root_dir, &paths);
+        if affected_only {
+            Some(calculator.calculate_affected(&graph, &changed))
+        } else {
+            Some(changed)
+        }
+    } else {
+        None
+    };
+
+    let target_packages = filter.select_packages(&graph, base_set.as_ref())?;
+    let scheduler = corex_workspace::TaskScheduler::new();
+    scheduler.execute_script(&graph, &target_packages, script_name, options)
+}

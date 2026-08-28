@@ -21,6 +21,7 @@ corex-graph = { path = "../corex-graph" }
 corex-resolver = { path = "../corex-resolver" }
 corex-cache = { path = "../corex-cache" }
 corex-store = { path = "../corex-store" }
+corex-workspace = { path = "../corex-workspace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

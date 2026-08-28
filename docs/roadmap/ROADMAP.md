@@ -76,10 +76,10 @@ checks; common native/tooling packages work through explicit trust.
 
 ## Phase 6 — workspaces (`0.7`)
 
-- workspace discovery and local protocol resolution
-- topological recursive execution with bounded concurrency
-- filtering, changed, and affected package calculations
-- monorepo install and scheduler performance fixtures
+- [x] workspace discovery and local protocol resolution
+- [x] topological recursive execution with bounded concurrency
+- [x] filtering, changed, and affected package calculations
+- [x] monorepo install and scheduler performance fixtures
 
 Exit: representative monorepos install and execute deterministically with clear
 cycle, failure, and filtering behavior.

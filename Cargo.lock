@@ -53,6 +53,7 @@ dependencies = [
  "corex-resolver",
  "corex-semver",
  "corex-store",
+ "corex-workspace",
  "serde",
  "serde_json",
 ]
@@ -85,6 +86,7 @@ dependencies = [
  "corex-scripts",
  "corex-semver",
  "corex-store",
+ "corex-workspace",
  "serde",
  "serde_json",
 ]
@@ -249,6 +251,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "corex-workspace"
+version = "0.1.0"
+dependencies = [
+ "corex-config",
+ "corex-errors",
+ "corex-manifest",
+ "corex-scripts",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

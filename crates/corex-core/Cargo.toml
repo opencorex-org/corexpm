@@ -23,6 +23,7 @@ corex-installer = { path = "../corex-installer" }
 corex-lockfile = { path = "../corex-lockfile" }
 corex-policy = { path = "../corex-policy" }
 corex-scripts = { path = "../corex-scripts" }
+corex-workspace = { path = "../corex-workspace" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

@@ -51,6 +51,7 @@ enum CliOutput<T> {
     Error { error: Diagnostic },
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct ParsedArgs {
     command: Option<String>,
     command_args: Vec<String>,
@@ -61,6 +62,14 @@ struct ParsedArgs {
     help: bool,
     version: bool,
     fixtures: Option<String>,
+    target_workspaces: Vec<String>,
+    include_patterns: Vec<String>,
+    exclude_patterns: Vec<String>,
+    all: bool,
+    changed: bool,
+    affected: bool,
+    concurrency: Option<usize>,
+    fail_fast: Option<bool>,
 }
 
 fn main() -> ExitCode {
@@ -112,6 +121,7 @@ fn print_error(diag: Diagnostic, use_json: bool) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnostic> {
     let mut command = None;
     let mut command_args = Vec::new();
@@ -122,6 +132,14 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
     let mut help = false;
     let mut version = false;
     let mut fixtures = None;
+    let mut target_workspaces = Vec::new();
+    let mut include_patterns = Vec::new();
+    let mut exclude_patterns = Vec::new();
+    let mut all = false;
+    let mut changed = false;
+    let mut affected = false;
+    let mut concurrency = None;
+    let mut fail_fast = None;
 
     let mut iter = args.peekable();
     while let Some(arg) = iter.next() {
@@ -134,6 +152,60 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
             }
             "--no-offline" => {
                 offline = Some(false);
+            }
+            "--all" => {
+                all = true;
+            }
+            "--changed" => {
+                changed = true;
+            }
+            "--affected" => {
+                affected = true;
+            }
+            "--fail-fast" => {
+                fail_fast = Some(true);
+            }
+            "--no-fail-fast" => {
+                fail_fast = Some(false);
+            }
+            "-w" | "--workspace" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorFamily::Cli,
+                        1,
+                        "missing value for `--workspace` option",
+                    )
+                })?;
+                target_workspaces.push(val);
+            }
+            "--include" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(ErrorFamily::Cli, 1, "missing value for `--include` option")
+                })?;
+                include_patterns.push(val);
+            }
+            "--exclude" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(ErrorFamily::Cli, 1, "missing value for `--exclude` option")
+                })?;
+                exclude_patterns.push(val);
+            }
+            "--concurrency" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorFamily::Cli,
+                        1,
+                        "missing value for `--concurrency` option",
+                    )
+                })?;
+                let count = val.parse::<usize>().map_err(|_| {
+                    Diagnostic::new(
+                        ErrorFamily::Cli,
+                        1,
+                        format!("invalid concurrency value `{val}`"),
+                    )
+                })?;
+                concurrency = Some(count);
             }
             "--linker" => {
                 let val = iter.next().ok_or_else(|| {
@@ -212,6 +284,14 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
         help,
         version,
         fixtures,
+        target_workspaces,
+        include_patterns,
+        exclude_patterns,
+        all,
+        changed,
+        affected,
+        concurrency,
+        fail_fast,
     })
 }
 
@@ -269,6 +349,14 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
         help,
         version,
         fixtures,
+        target_workspaces,
+        include_patterns,
+        exclude_patterns,
+        all,
+        changed,
+        affected,
+        concurrency,
+        fail_fast,
     } = parsed;
 
     let config = resolve_config(None, linker, scripts, offline)?;
@@ -678,6 +766,54 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(None)
             }
         }
+        "workspace" | "ws" => {
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let metadata = corex_core::list_workspace_members(&project_root)?;
+
+            if json {
+                let output = CliOutput::Success { data: metadata };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Workspace Root: {}", metadata.root_dir.display());
+                println!("Members ({}):", metadata.packages.len());
+                for (name, pkg) in &metadata.packages {
+                    println!("  {} ({})", name, pkg.relative_path.display());
+                }
+                Ok(None)
+            }
+        }
+        "changed" => {
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let changed_set = corex_core::list_changed_packages(&project_root, None)?;
+
+            if json {
+                let output = CliOutput::Success { data: changed_set };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                if changed_set.is_empty() {
+                    println!("No packages changed.");
+                } else {
+                    for pkg in &changed_set {
+                        println!("{pkg}");
+                    }
+                }
+                Ok(None)
+            }
+        }
         "run" => {
             let script_arg = command_args.first().ok_or_else(|| {
                 Diagnostic::new(ErrorFamily::Cli, 1, "missing script name for `run` command")
@@ -692,23 +828,69 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 )
             })?;
 
-            let result = corex_core::run_project_script(&project_root, script_arg)?;
+            let is_ws_mode = all
+                || changed
+                || affected
+                || !target_workspaces.is_empty()
+                || !include_patterns.is_empty()
+                || !exclude_patterns.is_empty()
+                || corex_core::list_workspace_members(&project_root)
+                    .is_ok_and(|m| !m.packages.is_empty());
 
-            if json {
-                let output = CliOutput::Success { data: result };
-                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            if is_ws_mode {
+                let filter = corex_workspace::WorkspaceFilter {
+                    target_workspaces,
+                    include_patterns,
+                    exclude_patterns,
+                    all,
+                };
+                let options = corex_workspace::TaskSchedulerOptions {
+                    concurrency: concurrency.unwrap_or(4),
+                    fail_fast: fail_fast.unwrap_or(true),
+                };
+
+                let summary = corex_core::run_workspace_script(
+                    &project_root,
+                    script_arg,
+                    &filter,
+                    &options,
+                    changed,
+                    affected,
+                )?;
+
+                if json {
+                    let output = CliOutput::Success { data: summary };
+                    Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                } else {
+                    println!(
+                        "Executed workspace script `{script_arg}` across {} packages ({} succeeded, {} failed, {} skipped)",
+                        summary.total_tasks, summary.successful_tasks, summary.failed_tasks, summary.skipped_tasks
+                    );
+                    for (pkg, res) in &summary.results {
+                        let status = if res.success { "success" } else { "failed" };
+                        println!("  {pkg}: {status}");
+                    }
+                    Ok(None)
+                }
             } else {
-                println!(
-                    "Executed script `{script_arg}` in {}ms (success: {})",
-                    result.duration_ms, result.success
-                );
-                if !result.stdout.is_empty() {
-                    println!("{}", result.stdout);
+                let result = corex_core::run_project_script(&project_root, script_arg)?;
+
+                if json {
+                    let output = CliOutput::Success { data: result };
+                    Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                } else {
+                    println!(
+                        "Executed script `{script_arg}` in {}ms (success: {})",
+                        result.duration_ms, result.success
+                    );
+                    if !result.stdout.is_empty() {
+                        println!("{}", result.stdout);
+                    }
+                    if !result.stderr.is_empty() {
+                        eprintln!("{}", result.stderr);
+                    }
+                    Ok(None)
                 }
-                if !result.stderr.is_empty() {
-                    eprintln!("{}", result.stderr);
-                }
-                Ok(None)
             }
         }
         "exec" => {
@@ -1001,10 +1183,9 @@ mod tests {
         assert!(parse_args(args.into_iter()).is_err());
     }
 
-    #[test]
-    fn test_execute_doctor() {
-        let parsed = ParsedArgs {
-            command: Some("doctor".to_owned()),
+    fn default_test_parsed_args(cmd: &str) -> ParsedArgs {
+        ParsedArgs {
+            command: Some(cmd.to_owned()),
             command_args: Vec::new(),
             json: false,
             linker: None,
@@ -1013,24 +1194,28 @@ mod tests {
             help: false,
             version: false,
             fixtures: None,
-        };
+            target_workspaces: Vec::new(),
+            include_patterns: Vec::new(),
+            exclude_patterns: Vec::new(),
+            all: false,
+            changed: false,
+            affected: false,
+            concurrency: None,
+            fail_fast: None,
+        }
+    }
+
+    #[test]
+    fn test_execute_doctor() {
+        let parsed = default_test_parsed_args("doctor");
         let res = execute(parsed).unwrap();
         assert!(res.is_none());
     }
 
     #[test]
     fn test_execute_doctor_json() {
-        let parsed = ParsedArgs {
-            command: Some("doctor".to_owned()),
-            command_args: Vec::new(),
-            json: true,
-            linker: None,
-            scripts: None,
-            offline: None,
-            help: false,
-            version: false,
-            fixtures: None,
-        };
+        let mut parsed = default_test_parsed_args("doctor");
+        parsed.json = true;
         let res = execute(parsed).unwrap().unwrap();
         assert!(res.contains("\"status\": \"success\""));
         assert!(res.contains("\"version\""));
@@ -1038,35 +1223,40 @@ mod tests {
 
     #[test]
     fn test_execute_store_commands() {
-        let parsed = ParsedArgs {
-            command: Some("store".to_owned()),
-            command_args: vec!["status".to_owned()],
-            json: true,
-            linker: None,
-            scripts: None,
-            offline: None,
-            help: false,
-            version: false,
-            fixtures: None,
-        };
+        let mut parsed = default_test_parsed_args("store");
+        parsed.command_args = vec!["status".to_owned()];
+        parsed.json = true;
         let res = execute(parsed).unwrap().unwrap();
         assert!(res.contains("\"package_count\""));
     }
 
     #[test]
     fn test_execute_cache_commands() {
-        let parsed = ParsedArgs {
-            command: Some("cache".to_owned()),
-            command_args: vec!["status".to_owned()],
-            json: true,
-            linker: None,
-            scripts: None,
-            offline: None,
-            help: false,
-            version: false,
-            fixtures: None,
-        };
+        let mut parsed = default_test_parsed_args("cache");
+        parsed.command_args = vec!["status".to_owned()];
+        parsed.json = true;
         let res = execute(parsed).unwrap().unwrap();
         assert!(res.contains("\"metadata_count\""));
+    }
+
+    #[test]
+    fn test_parse_args_workspace_options() {
+        let args = vec![
+            "run".to_owned(),
+            "build".to_owned(),
+            "-w".to_owned(),
+            "@app/web".to_owned(),
+            "--all".to_owned(),
+            "--concurrency".to_owned(),
+            "8".to_owned(),
+            "--no-fail-fast".to_owned(),
+        ];
+        let parsed = parse_args(args.into_iter()).unwrap();
+        assert_eq!(parsed.command.as_deref(), Some("run"));
+        assert_eq!(parsed.command_args, vec!["build".to_owned()]);
+        assert_eq!(parsed.target_workspaces, vec!["@app/web".to_owned()]);
+        assert!(parsed.all);
+        assert_eq!(parsed.concurrency, Some(8));
+        assert_eq!(parsed.fail_fast, Some(false));
     }
 }
