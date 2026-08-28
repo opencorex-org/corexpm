@@ -1,0 +1,20 @@
+[package]
+name = "corex-store"
+description = "Immutable package-level Content-Addressed Store (CAS) for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+corex-fetch = { path = "../corex-fetch" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+fs2 = { workspace = true }
+
+[lints]
+workspace = true
