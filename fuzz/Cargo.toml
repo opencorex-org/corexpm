@@ -1,0 +1,28 @@
+[package]
+name = "corex-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+corex-errors = { path = "../crates/corex-errors" }
+corex-fetch = { path = "../crates/corex-fetch" }
+corex-lockfile = { path = "../crates/corex-lockfile" }
+corex-manifest = { path = "../crates/corex-manifest" }
+corex-semver = { path = "../crates/corex-semver" }
+
+[[bin]]
+name = "fuzz_manifest"
+path = "fuzz_targets/fuzz_manifest.rs"
+
+[[bin]]
+name = "fuzz_semver"
+path = "fuzz_targets/fuzz_semver.rs"
+
+[[bin]]
+name = "fuzz_lockfile"
+path = "fuzz_targets/fuzz_lockfile.rs"
+
+[[bin]]
+name = "fuzz_tarball"
+path = "fuzz_targets/fuzz_tarball.rs"
