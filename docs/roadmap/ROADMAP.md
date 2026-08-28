@@ -44,11 +44,11 @@ projects; corruption and unsafe archives fail without contaminating the store.
 
 ## Phase 3 — isolated installer (`0.4`)
 
-- isolated tree planner and strict dependency visibility
-- cross-platform link strategy and package binary links
-- transactional reconciliation and project state
-- install, add, remove, list, and initial run/exec command plumbing
-- cold, warm, offline, and reconciliation benchmarks
+- [x] isolated tree planner and strict dependency visibility
+- [x] cross-platform link strategy and package binary links
+- [x] transactional reconciliation and project state
+- [x] install, add, remove, list, and initial run/exec command plumbing
+- [x] cold, warm, offline, and reconciliation benchmarks
 
 Exit: ordinary script-free npm projects run from an isolated install on tier-1
 platforms, and repeat installs primarily reuse the global store.

@@ -226,3 +226,97 @@ pub fn cache_clean(custom_path: Option<&std::path::Path>) -> Result<(), corex_er
         corex_cache::CacheManager::new(cache_path(custom_path), corex_cache::CacheMode::Online);
     manager.clean()
 }
+
+/// Performs full end-to-end installation and isolated materialization.
+///
+/// # Errors
+/// Returns `Diagnostic` if installation or reconciliation fails.
+pub fn install_project(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+) -> Result<corex_installer::InstallResult, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.install(project_root, &context.config, fixtures_dir, None)
+}
+
+/// Adds a new dependency to `package.json` and reinstalls.
+///
+/// # Errors
+/// Returns `Diagnostic` if modifying manifest or installing fails.
+pub fn add_dependency(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+    package_name: &str,
+    version_spec: Option<&str>,
+    is_dev: bool,
+) -> Result<corex_installer::InstallResult, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.add_dependency(
+        project_root,
+        &context.config,
+        fixtures_dir,
+        None,
+        package_name,
+        version_spec,
+        is_dev,
+    )
+}
+
+/// Removes a dependency from `package.json` and reinstalls.
+///
+/// # Errors
+/// Returns `Diagnostic` if modifying manifest or installing fails.
+pub fn remove_dependency(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+    package_name: &str,
+) -> Result<corex_installer::InstallResult, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.remove_dependency(
+        project_root,
+        &context.config,
+        fixtures_dir,
+        None,
+        package_name,
+    )
+}
+
+/// Lists installed direct and transitive dependencies.
+///
+/// # Errors
+/// Returns `Diagnostic` if resolving or inspecting dependencies fails.
+pub fn list_dependencies(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+) -> Result<serde_json::Value, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.list_dependencies(project_root, &context.config, fixtures_dir)
+}
+
+/// Locates script `script_name` command string in `package.json`.
+///
+/// # Errors
+/// Returns `Diagnostic` if script is missing.
+pub fn run_script(
+    project_root: &std::path::Path,
+    script_name: &str,
+) -> Result<String, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.run_script(project_root, script_name)
+}
+
+/// Locates binary `binary_name` path in `node_modules/.bin/`.
+///
+/// # Errors
+/// Returns `Diagnostic` if binary is missing.
+pub fn exec_binary(
+    project_root: &std::path::Path,
+    binary_name: &str,
+) -> Result<std::path::PathBuf, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.exec_binary(project_root, binary_name)
+}

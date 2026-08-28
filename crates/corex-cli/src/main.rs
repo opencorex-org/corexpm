@@ -366,40 +366,196 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                     format!("failed to read current working directory: {e}"),
                 )
             })?;
-            let manifest_path = project_root.join("package.json");
-            if !manifest_path.exists() {
-                return Err(Diagnostic::new(
-                    ErrorFamily::Resolve,
-                    1,
-                    "package.json not found in the current directory",
-                )
-                .with_help("run `corexpm init` or create a package.json manually"));
-            }
 
-            let manifest_content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            let result = corex_core::install_project(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                if result.reconciled {
+                    println!(
+                        "Reconciled `{}` in {}ms (up to date)",
+                        result.manifest_name, result.elapsed_ms
+                    );
+                } else {
+                    println!(
+                        "Installed `{}` in {}ms",
+                        result.manifest_name, result.elapsed_ms
+                    );
+                    println!("  Resolved packages:     {}", result.resolved_count);
+                    println!(
+                        "  Direct dependencies:   {}",
+                        result.summary.direct_dependencies
+                    );
+                    println!(
+                        "  Virtual instances:     {}",
+                        result.summary.virtual_instances
+                    );
+                    println!("  Symlinks created:      {}", result.summary.total_links);
+                    println!("  Binary shims linked:   {}", result.summary.binary_links);
+                }
+                Ok(None)
+            }
+        }
+        "add" => {
+            let pkg_arg = command_args.first().ok_or_else(|| {
                 Diagnostic::new(
-                    ErrorFamily::Resolve,
+                    ErrorFamily::Cli,
+                    1,
+                    "missing package name for `add` command",
+                )
+                .with_help("Usage: corexpm add <package-name> [--dev]")
+            })?;
+
+            let is_dev = command_args.iter().any(|a| a == "--dev" || a == "-D");
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
                     2,
-                    format!(
-                        "failed to read package.json at `{}`: {e}",
-                        manifest_path.display()
-                    ),
+                    format!("failed to read current working directory: {e}"),
                 )
             })?;
 
-            let graph = corex_core::resolve_manifest(&manifest_content, &context, &fixtures_path)?;
+            let result = corex_core::add_dependency(
+                &project_root,
+                &context,
+                &fixtures_path,
+                pkg_arg,
+                None,
+                is_dev,
+            )?;
 
             if json {
-                let output = CliOutput::Success { data: graph };
+                let output = CliOutput::Success { data: result };
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
-                println!("Successfully resolved dependency graph!");
                 println!(
-                    "Root packages:                      {}",
-                    graph.root_nodes.len()
+                    "Added `{pkg_arg}` and installed project in {}ms",
+                    result.elapsed_ms
                 );
-                println!("Total resolved package instances:   {}", graph.nodes.len());
-                println!("Total dependency links:             {}", graph.edges.len());
+                Ok(None)
+            }
+        }
+        "remove" => {
+            let pkg_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    "missing package name for `remove` command",
+                )
+                .with_help("Usage: corexpm remove <package-name>")
+            })?;
+
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let result =
+                corex_core::remove_dependency(&project_root, &context, &fixtures_path, pkg_arg)?;
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "Removed `{pkg_arg}` and reconciled project in {}ms",
+                    result.elapsed_ms
+                );
+                Ok(None)
+            }
+        }
+        "list" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let tree = corex_core::list_dependencies(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: tree };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("{}", serde_json::to_string_pretty(&tree).unwrap());
+                Ok(None)
+            }
+        }
+        "run" => {
+            let script_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(ErrorFamily::Cli, 1, "missing script name for `run` command")
+                    .with_help("Usage: corexpm run <script-name>")
+            })?;
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let cmd_str = corex_core::run_script(&project_root, script_arg)?;
+
+            if json {
+                let output = CliOutput::Success {
+                    data: serde_json::json!({
+                        "script": script_arg,
+                        "command": cmd_str,
+                    }),
+                };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Running script `{script_arg}`: {cmd_str}");
+                Ok(None)
+            }
+        }
+        "exec" => {
+            let bin_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    "missing binary name for `exec` command",
+                )
+                .with_help("Usage: corexpm exec <binary-name>")
+            })?;
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let bin_path = corex_core::exec_binary(&project_root, bin_arg)?;
+
+            if json {
+                let output = CliOutput::Success {
+                    data: serde_json::json!({
+                        "binary": bin_arg,
+                        "path": bin_path,
+                    }),
+                };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Executable binary `{bin_arg}` at: {}", bin_path.display());
                 Ok(None)
             }
         }
