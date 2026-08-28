@@ -835,8 +835,7 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 || !include_patterns.is_empty()
                 || !exclude_patterns.is_empty()
                 || corex_core::list_workspace_members(&project_root)
-                    .map(|m| !m.packages.is_empty())
-                    .unwrap_or(false);
+                    .is_ok_and(|m| !m.packages.is_empty());
 
             if is_ws_mode {
                 let filter = corex_workspace::WorkspaceFilter {
