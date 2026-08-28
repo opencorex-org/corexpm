@@ -1,0 +1,26 @@
+[package]
+name = "corex-lockfile"
+description = "Deterministic corex.lock read, write, canonical serialization, and validation for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+corex-manifest = { path = "../corex-manifest" }
+corex-semver = { path = "../corex-semver" }
+corex-graph = { path = "../corex-graph" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+corex-config = { path = "../corex-config" }
+corex-registry = { path = "../corex-registry" }
+corex-resolver = { path = "../corex-resolver" }
+
+[lints]
+workspace = true
