@@ -622,10 +622,17 @@ fn compute_dir_size(dir: &Path) -> u64 {
     total
 }
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn set_readonly_recursive(dir: &Path, readonly: bool) -> Result<(), Diagnostic> {
     if !readonly {
         if let Ok(meta) = dir.metadata() {
             let mut perms = meta.permissions();
+            #[cfg(unix)]
+            perms.set_mode(0o755);
+            #[cfg(not(unix))]
+            #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             let _ = fs::set_permissions(dir, perms);
         }
@@ -639,7 +646,15 @@ fn set_readonly_recursive(dir: &Path, readonly: bool) -> Result<(), Diagnostic> 
             } else if path.is_file() {
                 if let Ok(meta) = path.metadata() {
                     let mut perms = meta.permissions();
-                    perms.set_readonly(readonly);
+                    if readonly {
+                        perms.set_readonly(true);
+                    } else {
+                        #[cfg(unix)]
+                        perms.set_mode(0o644);
+                        #[cfg(not(unix))]
+                        #[allow(clippy::permissions_set_readonly_false)]
+                        perms.set_readonly(false);
+                    }
                     let _ = fs::set_permissions(&path, perms);
                 }
             }
