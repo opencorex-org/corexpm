@@ -356,6 +356,9 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
             }
         }
         "install" | "i" => {
+            let is_frozen = command_args
+                .iter()
+                .any(|a| a == "--frozen" || a == "--frozen-lockfile" || a == "--immutable");
             let fixtures_path =
                 fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
 
@@ -367,7 +370,11 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 )
             })?;
 
-            let result = corex_core::install_project(&project_root, &context, &fixtures_path)?;
+            let result = if is_frozen {
+                corex_core::install_project_frozen(&project_root, &context, &fixtures_path)?
+            } else {
+                corex_core::install_project(&project_root, &context, &fixtures_path)?
+            };
 
             if json {
                 let output = CliOutput::Success { data: result };
@@ -380,7 +387,7 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                     );
                 } else {
                     println!(
-                        "Installed `{}` in {}ms",
+                        "Installed `{}` in {}ms (frozen: {is_frozen})",
                         result.manifest_name, result.elapsed_ms
                     );
                     println!("  Resolved packages:     {}", result.resolved_count);
@@ -396,6 +403,76 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                     println!("  Binary shims linked:   {}", result.summary.binary_links);
                 }
                 Ok(None)
+            }
+        }
+        "ci" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let result =
+                corex_core::install_project_frozen(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "CI Frozen Install completed for `{}` in {}ms",
+                    result.manifest_name, result.elapsed_ms
+                );
+                println!("  Resolved packages: {}", result.resolved_count);
+                Ok(None)
+            }
+        }
+        "lockfile" | "lock" => {
+            let sub = command_args.first().map_or("verify", String::as_str);
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+            let lockfile_path = project_root.join("corex.lock.json");
+
+            match sub {
+                "path" => {
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "path": lockfile_path }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("{}", lockfile_path.display());
+                        Ok(None)
+                    }
+                }
+                "verify" | "status" => {
+                    let lockfile = corex_core::verify_lockfile(&project_root)?;
+                    if json {
+                        let output = CliOutput::Success { data: lockfile };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Lockfile `corex.lock.json` verified cleanly!");
+                        println!("  Version:   {}", lockfile.lockfile_version);
+                        println!("  Packages:  {}", lockfile.packages.len());
+                        Ok(None)
+                    }
+                }
+                _ => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    3,
+                    format!("unknown lockfile subcommand `{sub}`"),
+                )
+                .with_help("supported lockfile subcommands: path, verify, status")),
             }
         }
         "add" => {
