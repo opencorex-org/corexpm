@@ -1,0 +1,25 @@
+[package]
+name = "corex-installer"
+description = "Installer transaction planning, project state management, and reconciliation engine for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+corex-config = { path = "../corex-config" }
+corex-manifest = { path = "../corex-manifest" }
+corex-graph = { path = "../corex-graph" }
+corex-registry = { path = "../corex-registry" }
+corex-resolver = { path = "../corex-resolver" }
+corex-store = { path = "../corex-store" }
+corex-linker = { path = "../corex-linker" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true
