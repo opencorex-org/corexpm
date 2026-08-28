@@ -1,0 +1,17 @@
+[package]
+name = "corex-scripts"
+description = "Lifecycle and package script process execution with secret redaction and build overlays for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+corex-policy = { path = "../corex-policy" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
