@@ -1,0 +1,20 @@
+[package]
+name = "corex-fetch"
+description = "Concurrent streamed package fetching, integrity verification, and safe extraction for CorexPM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+serde = { workspace = true }
+sha2 = { workspace = true }
+sha1 = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+hex = { workspace = true }
+
+[lints]
+workspace = true
