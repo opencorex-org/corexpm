@@ -75,12 +75,15 @@ dependencies = [
  "corex-errors",
  "corex-fetch",
  "corex-graph",
+ "corex-installer",
+ "corex-linker",
  "corex-manifest",
  "corex-registry",
  "corex-resolver",
  "corex-semver",
  "corex-store",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -111,6 +114,41 @@ dependencies = [
  "corex-manifest",
  "corex-semver",
  "serde",
+]
+
+[[package]]
+name = "corex-installer"
+version = "0.1.0"
+dependencies = [
+ "corex-config",
+ "corex-errors",
+ "corex-graph",
+ "corex-linker",
+ "corex-manifest",
+ "corex-registry",
+ "corex-resolver",
+ "corex-store",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "corex-linker"
+version = "0.1.0"
+dependencies = [
+ "corex-config",
+ "corex-errors",
+ "corex-graph",
+ "corex-manifest",
+ "corex-registry",
+ "corex-resolver",
+ "corex-store",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

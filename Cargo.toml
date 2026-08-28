@@ -12,6 +12,8 @@ members = [
   "crates/corex-fetch",
   "crates/corex-cache",
   "crates/corex-store",
+  "crates/corex-linker",
+  "crates/corex-installer",
 ]
 resolver = "2"
 
