@@ -65,11 +65,11 @@ reproduce the same validated graph.
 
 ## Phase 5 — bins, scripts, and Corex Guard baseline (`0.6`)
 
-- npm lifecycle order and executable shim compatibility
-- deny-by-default dependency script policy
-- explicit trust decisions and non-interactive behavior
-- immutable-source build overlays and native artifact cache keys
-- `permissions` and trust explanation UX
+- [x] npm lifecycle order and executable shim compatibility
+- [x] deny-by-default dependency script policy
+- [x] explicit trust decisions and non-interactive behavior
+- [x] immutable-source build overlays and native artifact cache keys
+- [x] `permissions` and trust explanation UX
 
 Exit: supported lifecycle behavior never executes before integrity and policy
 checks; common native/tooling packages work through explicit trust.
