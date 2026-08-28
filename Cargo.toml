@@ -18,6 +18,9 @@ members = [
   "crates/corex-policy",
   "crates/corex-scripts",
   "crates/corex-workspace",
+  "crates/corex-audit",
+  "crates/corex-security",
+  "fuzz",
 ]
 resolver = "2"
 
