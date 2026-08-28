@@ -1,6 +1,16 @@
-# CorexPM
+<div align="center">
+  <img src="assets/logo.png" alt="CorexPM Logo" width="120" />
+  <h1>CorexPM</h1>
+  <p><strong>Download once. Store once. Use everywhere.</strong></p>
 
-> Download once. Store once. Use everywhere.
+  <p>
+    <a href="https://github.com/opencorex-org/corexpm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/opencorex-org/corexpm/ci.yml?branch=main&label=CI&logo=github" alt="CI Status" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+    <img src="https://img.shields.io/badge/version-0.1.0--dev-orange" alt="Version" />
+    <img src="https://img.shields.io/badge/rust-2021-blue?logo=rust" alt="Rust Edition" />
+    <img src="https://img.shields.io/badge/ecosystem-npm%20%7C%20pnpm-cb3837?logo=npm" alt="Ecosystem" />
+  </p>
+</div>
 
 CorexPM is an experimental, secure, disk-efficient package manager for the
 JavaScript and TypeScript ecosystem. It is designed around an immutable global
@@ -70,6 +80,7 @@ for npm, pnpm, Yarn Modern, Bun, and CorexPM.
 ## Repository layout
 
 ```text
+assets/       Project brand assets and logo
 crates/       Rust implementation
 packages/     Future TypeScript SDKs and Node integration
 apps/         Future documentation and benchmark applications

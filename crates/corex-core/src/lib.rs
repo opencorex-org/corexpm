@@ -67,14 +67,25 @@ pub fn platform_tier() -> (&'static str, &'static str) {
 #[must_use]
 pub fn doctor_info() -> DoctorInfo {
     let (tier_name, tier_desc) = platform_tier();
+    let s_path = default_store_dir();
+    let store_desc = if s_path.exists() {
+        if let Ok(st) = store_stats(None) {
+            format!("{} ({} packages)", s_path.display(), st.package_count)
+        } else {
+            format!("{} (initialized)", s_path.display())
+        }
+    } else {
+        format!("{} (not initialized)", s_path.display())
+    };
+
     DoctorInfo {
         version: format!("{VERSION}-dev"),
         platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         tier: format!("{tier_name} ({tier_desc})"),
         workspace: "bootstrap".to_string(),
-        store: "not initialized".to_string(),
+        store: store_desc,
         registry: "not checked".to_string(),
-        status: "development scaffold".to_string(),
+        status: "ready".to_string(),
     }
 }
 
@@ -128,4 +139,90 @@ pub fn fetch_package_info(
 
     let client = MockRegistryClient::new(fixtures_dir);
     client.fetch_metadata(&name)
+}
+
+/// Computes the default global Corex store path (`~/.corex/store/v1`).
+#[must_use]
+pub fn default_store_dir() -> std::path::PathBuf {
+    dirs_home_or_temp().join(".corex").join("store").join("v1")
+}
+
+/// Computes the default global Corex cache path (`~/.corex/cache`).
+#[must_use]
+pub fn default_cache_dir() -> std::path::PathBuf {
+    dirs_home_or_temp().join(".corex").join("cache")
+}
+
+fn dirs_home_or_temp() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(std::env::temp_dir, std::path::PathBuf::from)
+}
+
+/// Returns store path string.
+#[must_use]
+pub fn store_path(custom_path: Option<&std::path::Path>) -> std::path::PathBuf {
+    custom_path.map_or_else(default_store_dir, std::path::PathBuf::from)
+}
+
+/// Returns cache path string.
+#[must_use]
+pub fn cache_path(custom_path: Option<&std::path::Path>) -> std::path::PathBuf {
+    custom_path.map_or_else(default_cache_dir, std::path::PathBuf::from)
+}
+
+/// Returns store statistics report.
+///
+/// # Errors
+/// Returns `Diagnostic` if store scan fails.
+pub fn store_stats(
+    custom_path: Option<&std::path::Path>,
+) -> Result<corex_store::StoreStats, corex_errors::Diagnostic> {
+    let store = corex_store::Store::new(store_path(custom_path));
+    store.stats()
+}
+
+/// Performs verification on committed store packages.
+///
+/// # Errors
+/// Returns `Diagnostic` if store verification fails.
+pub fn store_verify(
+    custom_path: Option<&std::path::Path>,
+) -> Result<corex_store::VerificationReport, corex_errors::Diagnostic> {
+    let store = corex_store::Store::new(store_path(custom_path));
+    store.verify()
+}
+
+/// Prunes unreferenced CAS packages from store after grace period.
+///
+/// # Errors
+/// Returns `Diagnostic` if prune operation fails.
+pub fn store_prune(
+    custom_path: Option<&std::path::Path>,
+    grace_period_secs: u64,
+) -> Result<corex_store::PruneSummary, corex_errors::Diagnostic> {
+    let store = corex_store::Store::new(store_path(custom_path));
+    store.prune(grace_period_secs)
+}
+
+/// Returns cache status summary.
+///
+/// # Errors
+/// Returns `Diagnostic` if reading cache directory fails.
+pub fn cache_status(
+    custom_path: Option<&std::path::Path>,
+    mode: corex_cache::CacheMode,
+) -> Result<corex_cache::CacheStatus, corex_errors::Diagnostic> {
+    let manager = corex_cache::CacheManager::new(cache_path(custom_path), mode);
+    manager.status()
+}
+
+/// Cleans cache contents.
+///
+/// # Errors
+/// Returns `Diagnostic` if cleaning cache directory fails.
+pub fn cache_clean(custom_path: Option<&std::path::Path>) -> Result<(), corex_errors::Diagnostic> {
+    let manager =
+        corex_cache::CacheManager::new(cache_path(custom_path), corex_cache::CacheMode::Online);
+    manager.clean()
 }

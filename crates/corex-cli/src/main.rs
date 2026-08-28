@@ -483,6 +483,145 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(None)
             }
         }
+        "store" => {
+            let subcmd = command_args.first().map_or("status", String::as_str);
+            match subcmd {
+                "path" => {
+                    let path = corex_core::store_path(None);
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "path": path }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("{}", path.display());
+                        Ok(None)
+                    }
+                }
+                "status" | "stats" => {
+                    let stats = corex_core::store_stats(None)?;
+                    if json {
+                        let output = CliOutput::Success { data: stats };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Store path:         {}", stats.store_path.display());
+                        println!("Unique packages:    {}", stats.package_count);
+                        println!("Physical size:      {} bytes", stats.physical_bytes);
+                        println!("Logical referenced: {} bytes", stats.logical_bytes);
+                        println!("Deduplicated saved: {} bytes", stats.saved_bytes);
+                        println!("Registered projects:{}", stats.project_count);
+                        Ok(None)
+                    }
+                }
+                "verify" | "validate" => {
+                    let report = corex_core::store_verify(None)?;
+                    if json {
+                        let output = CliOutput::Success { data: report };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Store Verification Summary:");
+                        println!("  Valid package objects:    {}", report.valid_count);
+                        println!("  Corrupt package objects:  {}", report.corrupt_count);
+                        for detail in &report.corrupt_details {
+                            println!("    - {detail}");
+                        }
+                        Ok(None)
+                    }
+                }
+                "prune" => {
+                    let mut grace_period = 86400u64; // default 24 hours
+                    let mut iter = command_args.iter().skip(1);
+                    while let Some(arg) = iter.next() {
+                        if arg == "--grace-period" {
+                            if let Some(val) = iter.next() {
+                                grace_period = val.parse::<u64>().map_err(|_| {
+                                    Diagnostic::new(
+                                        ErrorFamily::Cli,
+                                        1,
+                                        format!("invalid grace period value: `{val}`"),
+                                    )
+                                })?;
+                            }
+                        } else if let Ok(val) = arg.parse::<u64>() {
+                            grace_period = val;
+                        }
+                    }
+
+                    let summary = corex_core::store_prune(None, grace_period)?;
+                    if json {
+                        let output = CliOutput::Success { data: summary };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Store Prune Summary:");
+                        println!("  Removed packages:  {}", summary.removed_count);
+                        println!("  Reclaimed space:   {} bytes", summary.reclaimed_bytes);
+                        for key in &summary.pruned_keys {
+                            println!("    - Pruned: {key}");
+                        }
+                        Ok(None)
+                    }
+                }
+                other => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    format!("unknown subcommand for `store`: `{other}`"),
+                )
+                .with_help("supported subcommands: path, status, stats, verify, prune")),
+            }
+        }
+        "cache" => {
+            let subcmd = command_args.first().map_or("status", String::as_str);
+            match subcmd {
+                "path" => {
+                    let path = corex_core::cache_path(None);
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "path": path }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("{}", path.display());
+                        Ok(None)
+                    }
+                }
+                "status" => {
+                    let mode = if context.config.offline {
+                        corex_cache::CacheMode::Offline
+                    } else {
+                        corex_cache::CacheMode::Online
+                    };
+                    let status = corex_core::cache_status(None, mode)?;
+                    if json {
+                        let output = CliOutput::Success { data: status };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Cache path:        {}", status.path.display());
+                        println!("Cached metadata:   {} files", status.metadata_count);
+                        println!("Cached tarballs:   {} files", status.tarball_count);
+                        println!("Total size:        {} bytes", status.total_bytes);
+                        Ok(None)
+                    }
+                }
+                "clean" => {
+                    corex_core::cache_clean(None)?;
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "cleaned": true }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Successfully cleaned local cache.");
+                        Ok(None)
+                    }
+                }
+                other => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    format!("unknown subcommand for `cache`: `{other}`"),
+                )
+                .with_help("supported subcommands: path, status, clean")),
+            }
+        }
         other => Err(Diagnostic::new(
             ErrorFamily::Cli,
             1,
@@ -554,5 +693,39 @@ mod tests {
         let res = execute(parsed).unwrap().unwrap();
         assert!(res.contains("\"status\": \"success\""));
         assert!(res.contains("\"version\""));
+    }
+
+    #[test]
+    fn test_execute_store_commands() {
+        let parsed = ParsedArgs {
+            command: Some("store".to_owned()),
+            command_args: vec!["status".to_owned()],
+            json: true,
+            linker: None,
+            scripts: None,
+            offline: None,
+            help: false,
+            version: false,
+            fixtures: None,
+        };
+        let res = execute(parsed).unwrap().unwrap();
+        assert!(res.contains("\"package_count\""));
+    }
+
+    #[test]
+    fn test_execute_cache_commands() {
+        let parsed = ParsedArgs {
+            command: Some("cache".to_owned()),
+            command_args: vec!["status".to_owned()],
+            json: true,
+            linker: None,
+            scripts: None,
+            offline: None,
+            help: false,
+            version: false,
+            fixtures: None,
+        };
+        let res = execute(parsed).unwrap().unwrap();
+        assert!(res.contains("\"metadata_count\""));
     }
 }

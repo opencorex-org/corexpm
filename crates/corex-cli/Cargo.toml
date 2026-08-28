@@ -19,6 +19,8 @@ corex-registry = { path = "../corex-registry" }
 corex-semver = { path = "../corex-semver" }
 corex-graph = { path = "../corex-graph" }
 corex-resolver = { path = "../corex-resolver" }
+corex-cache = { path = "../corex-cache" }
+corex-store = { path = "../corex-store" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
