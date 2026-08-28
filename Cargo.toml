@@ -17,6 +17,7 @@ members = [
   "crates/corex-lockfile",
   "crates/corex-policy",
   "crates/corex-scripts",
+  "crates/corex-workspace",
 ]
 resolver = "2"
 
