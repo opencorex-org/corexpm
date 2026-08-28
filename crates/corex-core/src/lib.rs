@@ -372,3 +372,79 @@ pub fn verify_lockfile(
     lockfile.validate_integrity()?;
     Ok(lockfile)
 }
+
+/// Approves dependency lifecycle scripts for package `package_name`.
+///
+/// # Errors
+/// Returns `Diagnostic` if saving trust store fails.
+pub fn approve_trust(
+    project_root: &std::path::Path,
+    package_name: &str,
+) -> Result<(), corex_errors::Diagnostic> {
+    let engine = corex_policy::PolicyEngine::new();
+    engine.approve_package(project_root, package_name)
+}
+
+/// Denies dependency lifecycle scripts for package `package_name`.
+///
+/// # Errors
+/// Returns `Diagnostic` if saving trust store fails.
+pub fn deny_trust(
+    project_root: &std::path::Path,
+    package_name: &str,
+) -> Result<(), corex_errors::Diagnostic> {
+    let engine = corex_policy::PolicyEngine::new();
+    engine.deny_package(project_root, package_name)
+}
+
+/// Returns the project `TrustStore`.
+///
+/// # Errors
+/// Returns `Diagnostic` if loading trust store fails.
+pub fn list_trust(
+    project_root: &std::path::Path,
+) -> Result<corex_policy::TrustStore, corex_errors::Diagnostic> {
+    let trust_path = project_root.join(".corex").join("trust.json");
+    corex_policy::TrustStore::load_from_path(&trust_path)
+}
+
+/// Generates detailed `PermissionsReport` for all project dependencies.
+///
+/// # Errors
+/// Returns `Diagnostic` if reading manifest or resolving graph fails.
+pub fn get_permissions_report(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+) -> Result<corex_policy::PermissionsReport, corex_errors::Diagnostic> {
+    let manifest_path = project_root.join("package.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        corex_errors::Diagnostic::new(
+            corex_errors::ErrorFamily::Resolve,
+            1,
+            format!("failed reading `package.json`: {e}"),
+        )
+    })?;
+
+    let manifest = corex_manifest::PackageManifest::parse_json(&manifest_text)?;
+    let client = corex_registry::MockRegistryClient::new(fixtures_dir);
+    let resolver = corex_resolver::DependencyResolver::new(&client, &context.config);
+    let graph = resolver.resolve(&manifest)?;
+
+    let engine = corex_policy::PolicyEngine::new();
+    Ok(engine.generate_permissions_report(project_root, &graph, false))
+}
+
+/// Executes project script `script_name` with secret redaction and sanitized environment.
+///
+/// # Errors
+/// Returns `Diagnostic` if script is missing or execution fails.
+pub fn run_project_script(
+    project_root: &std::path::Path,
+    script_name: &str,
+) -> Result<corex_scripts::ScriptExecutionResult, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    let cmd_str = installer.run_script(project_root, script_name)?;
+    let executor = corex_scripts::ScriptExecutor::new();
+    executor.execute_script(project_root, project_root, "root", script_name, &cmd_str)
+}

@@ -79,8 +79,10 @@ dependencies = [
  "corex-linker",
  "corex-lockfile",
  "corex-manifest",
+ "corex-policy",
  "corex-registry",
  "corex-resolver",
+ "corex-scripts",
  "corex-semver",
  "corex-store",
  "serde",
@@ -127,8 +129,10 @@ dependencies = [
  "corex-linker",
  "corex-lockfile",
  "corex-manifest",
+ "corex-policy",
  "corex-registry",
  "corex-resolver",
+ "corex-scripts",
  "corex-store",
  "hex",
  "serde",
@@ -180,6 +184,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "corex-policy"
+version = "0.1.0"
+dependencies = [
+ "corex-config",
+ "corex-errors",
+ "corex-graph",
+ "corex-manifest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "corex-registry"
 version = "0.1.0"
 dependencies = [
@@ -201,6 +217,16 @@ dependencies = [
  "corex-registry",
  "corex-semver",
  "serde",
+]
+
+[[package]]
+name = "corex-scripts"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "corex-policy",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -39,6 +39,10 @@ pub struct InstallResult {
     pub resolved_count: usize,
     /// Materialization details.
     pub summary: MaterializationSummary,
+    /// Number of approved lifecycle scripts executed.
+    pub executed_scripts: usize,
+    /// Number of untrusted dependency scripts denied by default.
+    pub denied_scripts: usize,
     /// Elapsed installation time in milliseconds.
     pub elapsed_ms: u128,
 }
@@ -165,6 +169,8 @@ impl InstallerService {
                             manifest_name: m_name.to_string(),
                             resolved_count: saved_state.installed_packages,
                             summary: saved_state.link_summary,
+                            executed_scripts: 0,
+                            denied_scripts: 0,
                             elapsed_ms: start_time.elapsed().as_millis(),
                         });
                     }
@@ -213,7 +219,26 @@ impl InstallerService {
             .collect();
         let _ = store.register_project_references(project_root, &cas_keys);
 
-        // 5. Save canonical lockfile if not frozen
+        // 5. Evaluate Corex Guard script policy for dependencies
+        let policy_engine = corex_policy::PolicyEngine::new();
+        let mut executed_scripts = 0usize;
+        let mut denied_scripts = 0usize;
+
+        for node in graph.nodes.values() {
+            let pkg_name = node.package.name().as_str();
+            let (action, _) = policy_engine.evaluate_script_policy(project_root, pkg_name, frozen);
+            match action {
+                corex_policy::ScriptPolicyAction::Allow => {
+                    executed_scripts += 1;
+                }
+                corex_policy::ScriptPolicyAction::Deny
+                | corex_policy::ScriptPolicyAction::Prompt => {
+                    denied_scripts += 1;
+                }
+            }
+        }
+
+        // 6. Save canonical lockfile if not frozen
         if !frozen {
             let lockfile = corex_lockfile::Lockfile::from_graph(&graph, &manifest);
             if let Ok(lock_json) = lockfile.to_canonical_json() {
@@ -221,7 +246,7 @@ impl InstallerService {
             }
         }
 
-        // 6. Persist project state
+        // 7. Persist project state
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -252,6 +277,8 @@ impl InstallerService {
             manifest_name: m_name.to_string(),
             resolved_count: graph.nodes.len(),
             summary,
+            executed_scripts,
+            denied_scripts,
             elapsed_ms: start_time.elapsed().as_millis(),
         })
     }

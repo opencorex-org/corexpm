@@ -21,6 +21,8 @@ corex-store = { path = "../corex-store" }
 corex-linker = { path = "../corex-linker" }
 corex-installer = { path = "../corex-installer" }
 corex-lockfile = { path = "../corex-lockfile" }
+corex-policy = { path = "../corex-policy" }
+corex-scripts = { path = "../corex-scripts" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
