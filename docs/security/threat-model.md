@@ -30,6 +30,9 @@ The registry is a transport and identity source, not authority to execute code.
 | lockfile manipulation | frozen validation, integrity, reviewable deterministic diffs |
 | symlink/junction attack | no-follow validation and platform-specific adversarial tests |
 | resource exhaustion | size/count/depth limits, bounded concurrency, cancellation |
+| known vulnerability in dependency | `corex-audit` advisory pipeline and policy reporting (`corexpm audit`) |
+| tampered build output / release binary | `corex-security` cryptographic SHA-256 build provenance signature verification |
+| sandbox illusion | `corex-security` platform capability enforcement evaluator (`Enforced`, `Detected`, `Advisory`) |
 
 ## Residual risk
 
