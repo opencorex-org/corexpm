@@ -65,8 +65,39 @@ impl InstallerService {
         fixtures_dir: &Path,
         custom_store_dir: Option<&Path>,
     ) -> Result<InstallResult, Diagnostic> {
+        self.install_options(project_root, config, fixtures_dir, custom_store_dir, false)
+    }
+
+    /// Reconciles and installs project dependencies in strict frozen mode (`corexpm ci`).
+    ///
+    /// # Errors
+    /// Returns `Diagnostic` if lockfile is missing, out-of-sync with manifest, or invalid.
+    pub fn install_frozen(
+        &self,
+        project_root: &Path,
+        config: &ProjectConfig,
+        fixtures_dir: &Path,
+        custom_store_dir: Option<&Path>,
+    ) -> Result<InstallResult, Diagnostic> {
+        self.install_options(project_root, config, fixtures_dir, custom_store_dir, true)
+    }
+
+    /// Internal installation engine with configurable options.
+    ///
+    /// # Errors
+    /// Returns `Diagnostic` if installation or validation fails.
+    #[allow(clippy::too_many_lines)]
+    pub fn install_options(
+        &self,
+        project_root: &Path,
+        config: &ProjectConfig,
+        fixtures_dir: &Path,
+        custom_store_dir: Option<&Path>,
+        frozen: bool,
+    ) -> Result<InstallResult, Diagnostic> {
         let start_time = Instant::now();
         let manifest_path = project_root.join("package.json");
+        let lockfile_path = project_root.join("corex.lock.json");
 
         if !manifest_path.exists() {
             return Err(Diagnostic::new(
@@ -88,16 +119,43 @@ impl InstallerService {
             )
         })?;
 
+        let manifest = PackageManifest::parse_json(&manifest_content)?;
         let manifest_hash = compute_sha256(&manifest_content);
         let state_path = project_root.join(".corex").join("state.json");
         let node_modules = project_root.join("node_modules");
 
-        // Warm Fast Reconciliation Check
-        if node_modules.exists() && state_path.exists() {
+        // 1. Frozen Mode Checks
+        if frozen {
+            if !lockfile_path.exists() {
+                return Err(Diagnostic::new(
+                    ErrorFamily::Lockfile,
+                    10,
+                    format!(
+                        "lockfile `corex.lock.json` missing in project root `{}` during frozen install",
+                        project_root.display()
+                    ),
+                )
+                .with_help("run `corexpm install` to generate a lockfile before running frozen CI installs"));
+            }
+
+            let lock_content = fs::read_to_string(&lockfile_path).map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Lockfile,
+                    11,
+                    format!("failed reading lockfile `{}`: {e}", lockfile_path.display()),
+                )
+            })?;
+
+            let lockfile = corex_lockfile::Lockfile::from_json(&lock_content)?;
+            lockfile.validate_against_manifest(&manifest)?;
+            lockfile.validate_integrity()?;
+        }
+
+        // 2. Warm Fast Reconciliation Check (non-frozen)
+        if !frozen && node_modules.exists() && state_path.exists() && lockfile_path.exists() {
             if let Ok(state_str) = fs::read_to_string(&state_path) {
                 if let Ok(saved_state) = serde_json::from_str::<ProjectState>(&state_str) {
                     if saved_state.manifest_hash == manifest_hash {
-                        let manifest = PackageManifest::parse_json(&manifest_content)?;
                         let m_name = manifest
                             .name
                             .as_ref()
@@ -114,12 +172,24 @@ impl InstallerService {
             }
         }
 
-        // Full Install Pipeline
-        let manifest = PackageManifest::parse_json(&manifest_content)?;
-        let client = MockRegistryClient::new(fixtures_dir);
-        let resolver = DependencyResolver::new(&client, config);
-        let graph = resolver.resolve(&manifest)?;
+        // 3. Resolve Graph or Reconstruct from Lockfile
+        let graph = if frozen {
+            let lock_content = fs::read_to_string(&lockfile_path).map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Lockfile,
+                    11,
+                    format!("failed reading lockfile: {e}"),
+                )
+            })?;
+            let lockfile = corex_lockfile::Lockfile::from_json(&lock_content)?;
+            lockfile.to_graph()?
+        } else {
+            let client = MockRegistryClient::new(fixtures_dir);
+            let resolver = DependencyResolver::new(&client, config);
+            resolver.resolve(&manifest)?
+        };
 
+        // 4. Materialize isolated tree in CAS / node_modules
         let store_dir = custom_store_dir.map_or_else(
             || dirs_home_or_temp().join(".corex").join("store").join("v1"),
             PathBuf::from,
@@ -143,7 +213,15 @@ impl InstallerService {
             .collect();
         let _ = store.register_project_references(project_root, &cas_keys);
 
-        // Persist project state
+        // 5. Save canonical lockfile if not frozen
+        if !frozen {
+            let lockfile = corex_lockfile::Lockfile::from_graph(&graph, &manifest);
+            if let Ok(lock_json) = lockfile.to_canonical_json() {
+                let _ = fs::write(&lockfile_path, lock_json);
+            }
+        }
+
+        // 6. Persist project state
         let now_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -463,6 +541,12 @@ mod tests {
             .unwrap();
 
         assert!(res2.reconciled);
+
+        // 3. Frozen install with existing lockfile
+        let res3 = installer
+            .install_frozen(&temp_proj, &config, &fixtures, Some(&custom_store))
+            .unwrap();
+        assert_eq!(res3.manifest_name, "my-app");
 
         let _ = fs::remove_dir_all(&temp_proj);
         let _ = fs::remove_dir_all(&custom_store);

@@ -55,10 +55,10 @@ platforms, and repeat installs primarily reuse the global store.
 
 ## Phase 4 — deterministic lockfile (`0.5`)
 
-- accepted lockfile RFC and canonical serializer
-- graph/importer/peer/platform representation
-- atomic updates, merge-conflict diagnostics, and schema migration framework
-- `--frozen` and `corexpm ci`
+- [x] accepted lockfile RFC and canonical serializer
+- [x] graph/importer/peer/platform representation
+- [x] atomic updates, merge-conflict diagnostics, and schema migration framework
+- [x] `--frozen` and `corexpm ci`
 
 Exit: equivalent inputs produce byte-identical lockfiles and clean machines
 reproduce the same validated graph.

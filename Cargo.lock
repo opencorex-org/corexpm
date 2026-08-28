@@ -77,6 +77,7 @@ dependencies = [
  "corex-graph",
  "corex-installer",
  "corex-linker",
+ "corex-lockfile",
  "corex-manifest",
  "corex-registry",
  "corex-resolver",
@@ -124,6 +125,7 @@ dependencies = [
  "corex-errors",
  "corex-graph",
  "corex-linker",
+ "corex-lockfile",
  "corex-manifest",
  "corex-registry",
  "corex-resolver",
@@ -145,6 +147,23 @@ dependencies = [
  "corex-registry",
  "corex-resolver",
  "corex-store",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "corex-lockfile"
+version = "0.1.0"
+dependencies = [
+ "corex-config",
+ "corex-errors",
+ "corex-graph",
+ "corex-manifest",
+ "corex-registry",
+ "corex-resolver",
+ "corex-semver",
  "hex",
  "serde",
  "serde_json",

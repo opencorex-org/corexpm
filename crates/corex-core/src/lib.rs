@@ -320,3 +320,55 @@ pub fn exec_binary(
     let installer = corex_installer::InstallerService::new();
     installer.exec_binary(project_root, binary_name)
 }
+
+/// Performs frozen installation without modifying lockfile or manifests (`corexpm ci`).
+///
+/// # Errors
+/// Returns `Diagnostic` if lockfile is missing or out of sync with manifest.
+pub fn install_project_frozen(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+) -> Result<corex_installer::InstallResult, corex_errors::Diagnostic> {
+    let installer = corex_installer::InstallerService::new();
+    installer.install_frozen(project_root, &context.config, fixtures_dir, None)
+}
+
+/// Verifies `corex.lock.json` lockfile integrity and sync with `package.json`.
+///
+/// # Errors
+/// Returns `Diagnostic` if lockfile missing or mismatched.
+pub fn verify_lockfile(
+    project_root: &std::path::Path,
+) -> Result<corex_lockfile::Lockfile, corex_errors::Diagnostic> {
+    let lockfile_path = project_root.join("corex.lock.json");
+    if !lockfile_path.exists() {
+        return Err(corex_errors::Diagnostic::new(
+            corex_errors::ErrorFamily::Lockfile,
+            1,
+            format!(
+                "lockfile `corex.lock.json` not found in `{}`",
+                project_root.display()
+            ),
+        ));
+    }
+    let content = std::fs::read_to_string(&lockfile_path).map_err(|e| {
+        corex_errors::Diagnostic::new(
+            corex_errors::ErrorFamily::Lockfile,
+            2,
+            format!("failed reading lockfile: {e}"),
+        )
+    })?;
+
+    let lockfile = corex_lockfile::Lockfile::from_json(&content)?;
+    let manifest_path = project_root.join("package.json");
+    if manifest_path.exists() {
+        if let Ok(manifest_content) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = corex_manifest::PackageManifest::parse_json(&manifest_content) {
+                lockfile.validate_against_manifest(&manifest)?;
+            }
+        }
+    }
+    lockfile.validate_integrity()?;
+    Ok(lockfile)
+}
