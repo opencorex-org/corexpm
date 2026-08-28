@@ -33,11 +33,11 @@ compatibility fixture corpus; no package content is installed yet.
 
 ## Phase 2 — Corex CAS (`0.3`)
 
-- streamed tarball fetch, expected-integrity verification, safe extraction
-- immutable package-level CAS with atomic commits and cross-process locks
-- registry metadata and tarball caches with offline/prefer-offline behavior
-- store validation, path, status, and stats commands
-- crash recovery and garbage-collection design validation
+- [x] streamed tarball fetch, expected-integrity verification, safe extraction
+- [x] immutable package-level CAS with atomic commits and cross-process locks
+- [x] registry metadata and tarball caches with offline/prefer-offline behavior
+- [x] store validation, path, status, and stats commands
+- [x] crash recovery and garbage-collection design validation
 
 Exit: packages can be fetched once and safely reused across processes and
 projects; corruption and unsafe archives fail without contaminating the store.
