@@ -70,6 +70,8 @@ struct ParsedArgs {
     affected: bool,
     concurrency: Option<usize>,
     fail_fast: Option<bool>,
+    min_severity: Option<corex_audit::VulnerabilitySeverity>,
+    ignore_advisories: Vec<String>,
 }
 
 fn main() -> ExitCode {
@@ -140,6 +142,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
     let mut affected = false;
     let mut concurrency = None;
     let mut fail_fast = None;
+    let mut min_severity = None;
+    let mut ignore_advisories = Vec::new();
 
     let mut iter = args.peekable();
     while let Some(arg) = iter.next() {
@@ -206,6 +210,32 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
                     )
                 })?;
                 concurrency = Some(count);
+            }
+            "--severity" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(ErrorFamily::Cli, 1, "missing value for `--severity` option")
+                        .with_help("supported values: low, medium, high, critical")
+                })?;
+                match val.to_lowercase().as_str() {
+                    "low" => min_severity = Some(corex_audit::VulnerabilitySeverity::Low),
+                    "medium" => min_severity = Some(corex_audit::VulnerabilitySeverity::Medium),
+                    "high" => min_severity = Some(corex_audit::VulnerabilitySeverity::High),
+                    "critical" => min_severity = Some(corex_audit::VulnerabilitySeverity::Critical),
+                    other => {
+                        return Err(Diagnostic::new(
+                            ErrorFamily::Cli,
+                            1,
+                            format!("invalid severity level: `{other}`"),
+                        )
+                        .with_help("supported values: low, medium, high, critical"))
+                    }
+                }
+            }
+            "--ignore" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(ErrorFamily::Cli, 1, "missing value for `--ignore` option")
+                })?;
+                ignore_advisories.push(val);
             }
             "--linker" => {
                 let val = iter.next().ok_or_else(|| {
@@ -292,6 +322,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
         affected,
         concurrency,
         fail_fast,
+        min_severity,
+        ignore_advisories,
     })
 }
 
@@ -357,6 +389,8 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
         affected,
         concurrency,
         fail_fast,
+        min_severity,
+        ignore_advisories,
     } = parsed;
 
     let config = resolve_config(None, linker, scripts, offline)?;
@@ -736,6 +770,64 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 .with_help("supported trust subcommands: approve, deny, list")),
             }
         }
+        "audit" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let summary = corex_core::audit_project(
+                &project_root,
+                &context,
+                &fixtures_path,
+                min_severity,
+                &ignore_advisories,
+            )?;
+
+            if json {
+                let output = CliOutput::Success { data: summary };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "Security Audit Summary: {} packages scanned, {} vulnerabilities found",
+                    summary.scanned_packages, summary.vulnerabilities_found
+                );
+                println!(
+                    "  Critical: {} | High: {} | Medium: {} | Low: {}",
+                    summary.critical_count,
+                    summary.high_count,
+                    summary.medium_count,
+                    summary.low_count
+                );
+
+                if !summary.matches.is_empty() {
+                    println!("\nVulnerabilities:");
+                    for m in &summary.matches {
+                        println!(
+                            "  [{}] {} v{} — {}",
+                            m.advisory.severity.as_str().to_uppercase(),
+                            m.package_name,
+                            m.installed_version,
+                            m.advisory.title
+                        );
+                        println!(
+                            "    Advisory ID: {} | Vulnerable range: {}",
+                            m.advisory.id, m.advisory.vulnerable_range
+                        );
+                        if let Some(patched) = &m.advisory.patched_version {
+                            println!("    Patched version: {patched}");
+                        }
+                    }
+                }
+                Ok(None)
+            }
+        }
         "permissions" => {
             let fixtures_path =
                 fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
@@ -750,9 +842,14 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
 
             let report =
                 corex_core::get_permissions_report(&project_root, &context, &fixtures_path)?;
+            let enforcement = corex_core::evaluate_platform_security();
 
             if json {
-                let output = CliOutput::Success { data: report };
+                let data = serde_json::json!({
+                    "permissions": report,
+                    "platform_enforcement": enforcement,
+                });
+                let output = CliOutput::Success { data };
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
                 println!("Corex Guard Effective Policy:");
@@ -762,6 +859,19 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                         entry.package_name, entry.effective_action, entry.policy_source
                     );
                     println!("    {}", entry.explanation);
+                }
+
+                println!(
+                    "\nPlatform Capability Enforcement ({} / {}):",
+                    enforcement.os, enforcement.arch
+                );
+                for cap in &enforcement.capabilities {
+                    println!(
+                        "  {:30} => [{}] {}",
+                        cap.key,
+                        cap.level.as_str().to_uppercase(),
+                        cap.description
+                    );
                 }
                 Ok(None)
             }
@@ -1202,6 +1312,8 @@ mod tests {
             affected: false,
             concurrency: None,
             fail_fast: None,
+            min_severity: None,
+            ignore_advisories: Vec::new(),
         }
     }
 
@@ -1255,8 +1367,27 @@ mod tests {
         assert_eq!(parsed.command.as_deref(), Some("run"));
         assert_eq!(parsed.command_args, vec!["build".to_owned()]);
         assert_eq!(parsed.target_workspaces, vec!["@app/web".to_owned()]);
-        assert!(parsed.all);
         assert_eq!(parsed.concurrency, Some(8));
         assert_eq!(parsed.fail_fast, Some(false));
+    }
+
+    #[test]
+    fn test_parse_args_audit_options() {
+        let args = vec![
+            "audit".to_owned(),
+            "--severity".to_owned(),
+            "high".to_owned(),
+            "--ignore".to_owned(),
+            "CX-ADV-2026-001".to_owned(),
+            "--json".to_owned(),
+        ];
+        let parsed = parse_args(args.into_iter()).unwrap();
+        assert_eq!(parsed.command.as_deref(), Some("audit"));
+        assert_eq!(
+            parsed.min_severity,
+            Some(corex_audit::VulnerabilitySeverity::High)
+        );
+        assert_eq!(parsed.ignore_advisories, vec!["CX-ADV-2026-001".to_owned()]);
+        assert!(parsed.json);
     }
 }

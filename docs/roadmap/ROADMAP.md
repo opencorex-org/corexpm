@@ -86,10 +86,10 @@ cycle, failure, and filtering behavior.
 
 ## Phase 7 — security and audit expansion (`0.8`)
 
-- advisory audit pipeline and policy reporting
-- platform-specific capability enforcement experiments
-- archive, lockfile, manifest, semver, and resolver fuzzing
-- signed build provenance and security review readiness
+- [x] advisory audit pipeline and policy reporting
+- [x] platform-specific capability enforcement experiments
+- [x] archive, lockfile, manifest, semver, and resolver fuzzing
+- [x] signed build provenance and security review readiness
 
 Exit: threat-model mitigations are tested, enforcement limits are transparent,
 and release artifacts have a verifiable supply chain.

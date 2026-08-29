@@ -1,0 +1,20 @@
+[package]
+name = "corex-security"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+corex-errors = { path = "../corex-errors" }
+corex-manifest = { path = "../corex-manifest" }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

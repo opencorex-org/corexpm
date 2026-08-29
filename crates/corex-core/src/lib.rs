@@ -515,3 +515,55 @@ pub fn run_workspace_script(
     let scheduler = corex_workspace::TaskScheduler::new();
     scheduler.execute_script(&graph, &target_packages, script_name, options)
 }
+
+/// Performs security vulnerability and policy compliance audit on project dependencies.
+///
+/// # Errors
+/// Returns `Diagnostic` if manifest reading or dependency resolution fails.
+pub fn audit_project(
+    project_root: &std::path::Path,
+    context: &CorexContext,
+    fixtures_dir: &std::path::Path,
+    min_severity: Option<corex_audit::VulnerabilitySeverity>,
+    ignore_ids: &[String],
+) -> Result<corex_audit::AuditSummary, corex_errors::Diagnostic> {
+    let manifest_path = project_root.join("package.json");
+    let manifest_text = if manifest_path.exists() {
+        std::fs::read_to_string(&manifest_path).map_err(|e| {
+            corex_errors::Diagnostic::new(
+                corex_errors::ErrorFamily::Resolve,
+                1,
+                format!("failed reading `package.json`: {e}"),
+            )
+        })?
+    } else {
+        r#"{"name":"empty"}"#.to_string()
+    };
+
+    let manifest = corex_manifest::PackageManifest::parse_json(&manifest_text)?;
+    let client = corex_registry::MockRegistryClient::new(fixtures_dir);
+    let resolver = corex_resolver::DependencyResolver::new(&client, &context.config);
+    let graph = resolver.resolve(&manifest)?;
+
+    let engine = corex_audit::AuditEngine::new();
+    engine.audit_graph(&graph, min_severity, ignore_ids)
+}
+
+/// Evaluates security capability enforcement levels for the current host operating system.
+#[must_use]
+pub fn evaluate_platform_security() -> corex_security::PlatformEnforcementReport {
+    let evaluator = corex_security::CapabilityEnforcementEvaluator::new();
+    evaluator.evaluate_current_platform()
+}
+
+/// Verifies cryptographic SHA-256 build output provenance.
+///
+/// # Errors
+/// Returns `Diagnostic` if provenance signature or artifact digest validation fails.
+pub fn verify_provenance(
+    root_dir: &std::path::Path,
+    provenance: &corex_security::BuildProvenance,
+) -> Result<bool, corex_errors::Diagnostic> {
+    let verifier = corex_security::ProvenanceVerifier::new();
+    verifier.verify_provenance(root_dir, provenance)
+}

@@ -30,6 +30,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "corex-audit"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "corex-graph",
+ "corex-manifest",
+ "corex-policy",
+ "corex-semver",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "corex-cache"
 version = "0.1.0"
 dependencies = [
@@ -44,6 +57,7 @@ dependencies = [
 name = "corex-cli"
 version = "0.1.0"
 dependencies = [
+ "corex-audit",
  "corex-cache",
  "corex-config",
  "corex-core",
@@ -51,6 +65,7 @@ dependencies = [
  "corex-graph",
  "corex-registry",
  "corex-resolver",
+ "corex-security",
  "corex-semver",
  "corex-store",
  "corex-workspace",
@@ -71,6 +86,7 @@ dependencies = [
 name = "corex-core"
 version = "0.1.0"
 dependencies = [
+ "corex-audit",
  "corex-cache",
  "corex-config",
  "corex-errors",
@@ -84,6 +100,7 @@ dependencies = [
  "corex-registry",
  "corex-resolver",
  "corex-scripts",
+ "corex-security",
  "corex-semver",
  "corex-store",
  "corex-workspace",
@@ -109,6 +126,17 @@ dependencies = [
  "sha1",
  "sha2",
  "tar",
+]
+
+[[package]]
+name = "corex-fuzz"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "corex-fetch",
+ "corex-lockfile",
+ "corex-manifest",
+ "corex-semver",
 ]
 
 [[package]]
@@ -229,6 +257,18 @@ dependencies = [
  "corex-policy",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "corex-security"
+version = "0.1.0"
+dependencies = [
+ "corex-errors",
+ "corex-manifest",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
