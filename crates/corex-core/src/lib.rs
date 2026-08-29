@@ -567,3 +567,50 @@ pub fn verify_provenance(
     let verifier = corex_security::ProvenanceVerifier::new();
     verifier.verify_provenance(root_dir, provenance)
 }
+
+/// Summary report of foreign lockfile migration to `corex.lock.json`.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct MigrationSummary {
+    /// Detected foreign lockfile format name ("npm", "pnpm", "yarn", "bun").
+    pub format: String,
+    /// Absolute or relative path to source lockfile.
+    pub source_path: std::path::PathBuf,
+    /// Absolute or relative path to output `corex.lock.json`.
+    pub output_path: std::path::PathBuf,
+    /// Number of package entries imported.
+    pub packages_migrated: usize,
+    /// Invariant: Foreign source lockfile was preserved untouched.
+    pub source_preserved: bool,
+}
+
+/// Detects foreign lockfiles in `project_root`, converts them to a canonical `corex.lock.json`,
+/// and preserves the source foreign lockfile untouched.
+///
+/// # Errors
+/// Returns `Diagnostic` if no foreign lockfile is found or writing `corex.lock.json` fails.
+pub fn migrate_lockfile(
+    project_root: &std::path::Path,
+) -> Result<MigrationSummary, corex_errors::Diagnostic> {
+    let (lockfile, format, source_path) = corex_lockfile::detect_and_import_foreign(project_root)?;
+
+    let json_content = lockfile.to_canonical_json()?;
+    let output_path = project_root.join("corex.lock.json");
+
+    std::fs::write(&output_path, json_content).map_err(|e| {
+        corex_errors::Diagnostic::new(
+            corex_errors::ErrorFamily::Lockfile,
+            14,
+            format!("failed writing `corex.lock.json`: {e}"),
+        )
+    })?;
+
+    let source_preserved = source_path.exists();
+
+    Ok(MigrationSummary {
+        format: format.as_str().to_string(),
+        source_path,
+        output_path,
+        packages_migrated: lockfile.packages.len(),
+        source_preserved,
+    })
+}

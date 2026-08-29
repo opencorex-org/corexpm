@@ -8,17 +8,17 @@ through isolated `node_modules`.
 
 | Area | V1 intent | Current status |
 | --- | --- | --- |
-| `dependencies` / `devDependencies` | required | specified |
-| `optionalDependencies` | required | specified |
-| `peerDependencies` and metadata | required | specified |
-| `bin` and package scripts | required with policy | planned 0.6 |
-| `engines`, `os`, `cpu` | required | planned 0.2 |
-| npm workspaces | required | planned 0.7 |
-| npm registry auth/scopes | required | planned 0.2–0.3 |
-| aliases and dist-tags | required | planned 0.2 |
+| `dependencies` / `devDependencies` | required | **implemented (0.1–0.4)** |
+| `optionalDependencies` | required | **implemented (0.2–0.4)** |
+| `peerDependencies` and metadata | required | **implemented (0.2–0.4)** |
+| `bin` and package scripts | required with policy | **implemented (0.6)** |
+| `engines`, `os`, `cpu` | required | **implemented (0.2)** |
+| npm workspaces | required | **implemented (0.7)** |
+| npm registry auth/scopes | required | **implemented (0.2–0.3)** |
+| aliases and dist-tags | required | **implemented (0.2)** |
 | `file:` dependencies | required before 1.0 | unscheduled detail |
 | Git/URL dependencies | compatibility target | unscheduled detail |
-| npm lockfile import | migration target | planned 0.9 |
+| npm / pnpm / Yarn / Bun lockfile import | migration target | **implemented (0.9)** |
 | arbitrary npm CLI flags | not a goal | n/a |
 
 ## Test corpus
@@ -34,7 +34,5 @@ with a specific diagnostic; CorexPM must not silently approximate npm semantics.
 
 ## Migration behavior
 
-Foreign lockfiles are detected and left untouched. `corexpm migrate npm` writes
-a proposed `corex.lock`, reports lossy or unsupported information, and supports
-validation before the user chooses to remove another manager's lockfile.
+Foreign lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`) are detected and left **completely untouched**. Running `corexpm migrate` writes a canonical `corex.lock.json`, reports package import details, and explicitly preserves the original foreign lockfile.
 
