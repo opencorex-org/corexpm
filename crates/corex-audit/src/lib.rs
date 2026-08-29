@@ -66,9 +66,6 @@ mod tests {
             .audit_graph(&graph, None, &["CX-ADV-2026-001".to_string()])
             .unwrap();
         assert_eq!(summary_ignored.vulnerabilities_found, 1);
-        assert_eq!(
-            summary_ignored.matches[0].advisory.id,
-            "CX-ADV-2026-003"
-        );
+        assert_eq!(summary_ignored.matches[0].advisory.id, "CX-ADV-2026-003");
     }
 }
