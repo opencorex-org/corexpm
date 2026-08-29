@@ -2,9 +2,12 @@
 /.corex/
 /node_modules/
 *.log
+*.tgz
 .DS_Store
 .idea/
 .vscode/
 coverage/
 dist/
+vendor/
+packages/corexpm/vendor/
 
