@@ -15,6 +15,7 @@ Bootstrap and package commands:
   info                 Show package registry information
   install, i           Resolve project dependencies
   why                  Explain why a package is present
+  store                Inspect or maintain Corex CAS
 
 Planned package commands:
   init                 Create a package manifest and Corex configuration
@@ -32,7 +33,6 @@ Planned execution and security commands:
 Planned workspace and storage commands:
   workspace            Inspect or operate on workspace packages
   changed              List packages changed from a revision
-  store                Inspect or maintain Corex CAS
   cache                Inspect or maintain registry/download caches
 
 Options:
