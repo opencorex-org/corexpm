@@ -107,11 +107,13 @@ and release-candidate telemetry is not required to make compatibility claims.
 
 ## Phase 9 — stable release (`1.0`)
 
-- stable CLI and config contract
-- documented lockfile support policy
-- release signing, checksums, installers, and rollback guidance
-- production documentation and completed independent security review
-- sustained compatibility and performance gates
+- [x] stable CLI and config contract
+- [x] documented lockfile support policy
+- [x] release signing, checksums, installers, and rollback guidance
+- [x] production documentation and completed independent security review
+- [x] sustained compatibility and performance gates
+
+Exit: CorexPM is ready for 1.0.0 stable release!
 
 Post-1.0 work may include registry federation, sandboxed WASM plugins, stronger
 workspace intelligence, and blob-level deduplication. Corex Virtual is targeted
