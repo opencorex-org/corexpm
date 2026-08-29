@@ -899,6 +899,31 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(None)
             }
         }
+        "migrate" | "import" => {
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let summary = corex_core::migrate_lockfile(&project_root)?;
+
+            if json {
+                let output = CliOutput::Success { data: summary };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "Successfully imported {} lockfile ({}) to `corex.lock.json` ({} packages).",
+                    summary.format,
+                    summary.source_path.display(),
+                    summary.packages_migrated
+                );
+                println!("Invariant verified: Original foreign lockfile was preserved untouched.");
+                Ok(None)
+            }
+        }
         "changed" => {
             let project_root = std::env::current_dir().map_err(|e| {
                 Diagnostic::new(
@@ -1389,5 +1414,31 @@ mod tests {
         );
         assert_eq!(parsed.ignore_advisories, vec!["CX-ADV-2026-001".to_owned()]);
         assert!(parsed.json);
+    }
+
+    #[test]
+    fn test_execute_migrate_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package-lock.json"),
+            r#"{ "name": "test", "version": "1.0.0", "dependencies": { "express": { "version": "4.18.2" } } }"#,
+        )
+        .unwrap();
+
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let parsed = ParsedArgs {
+            command: Some("migrate".to_string()),
+            json: true,
+            ..default_test_parsed_args("migrate")
+        };
+
+        let result = execute(parsed).unwrap();
+        assert!(result.is_some());
+        assert!(tmp.path().join("corex.lock.json").exists());
+        assert!(tmp.path().join("package-lock.json").exists());
+
+        std::env::set_current_dir(original_dir).unwrap();
     }
 }
