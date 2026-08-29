@@ -1,0 +1,37 @@
+{
+  "name": "corexpm",
+  "version": "0.1.0",
+  "description": "Native package manager for JavaScript and TypeScript projects — Download once. Store once. Use everywhere.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "corexpm": "./bin/corexpm.js"
+  },
+  "scripts": {
+    "test": "node bin/corexpm.js doctor"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opencorex-org/corexpm.git"
+  },
+  "keywords": [
+    "package-manager",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "node_modules",
+    "content-addressed-store",
+    "cas",
+    "corex"
+  ],
+  "author": "OpenCorex contributors",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/opencorex-org/corexpm/issues"
+  },
+  "homepage": "https://github.com/opencorex-org/corexpm#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
