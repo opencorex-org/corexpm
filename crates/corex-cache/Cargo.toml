@@ -1,6 +1,6 @@
 [package]
 name = "corex-cache"
-description = "Conditional metadata and archive cache for CorexPM"
+description = "Registry metadata and package tarball conditional cache for CorexPM"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,9 +9,10 @@ repository.workspace = true
 
 [dependencies]
 corex-errors = { path = "../corex-errors" }
-corex-config = { path = "../corex-config" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [lints]
 workspace = true

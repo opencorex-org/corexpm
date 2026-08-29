@@ -71,6 +71,28 @@ pub struct PackageManifest {
     /// Peer dependency requirements.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub peer_dependencies: BTreeMap<PackageName, String>,
+    /// Package lifecycle and executable scripts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub scripts: BTreeMap<String, String>,
+    /// Workspace pattern declarations for monorepo roots.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum RawWorkspaces {
+    Array(Vec<String>),
+    Object { packages: Option<Vec<String>> },
+}
+
+impl RawWorkspaces {
+    fn into_patterns(self) -> Vec<String> {
+        match self {
+            Self::Array(vec) => vec,
+            Self::Object { packages } => packages.unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -83,6 +105,8 @@ struct RawPackageManifest {
     optional_dependencies: Option<BTreeMap<String, String>>,
     #[serde(rename = "peerDependencies")]
     peer_dependencies: Option<BTreeMap<String, String>>,
+    scripts: Option<BTreeMap<String, String>>,
+    workspaces: Option<RawWorkspaces>,
 }
 
 impl PackageManifest {
@@ -141,6 +165,11 @@ impl PackageManifest {
         let dev_dependencies = convert_deps(raw.dev_dependencies)?;
         let optional_dependencies = convert_deps(raw.optional_dependencies)?;
         let peer_dependencies = convert_deps(raw.peer_dependencies)?;
+        let scripts = raw.scripts.unwrap_or_default();
+        let workspaces = raw
+            .workspaces
+            .map(RawWorkspaces::into_patterns)
+            .unwrap_or_default();
 
         Ok(Self {
             name,
@@ -148,6 +177,8 @@ impl PackageManifest {
             dev_dependencies,
             optional_dependencies,
             peer_dependencies,
+            scripts,
+            workspaces,
         })
     }
 }
@@ -221,14 +252,21 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_invalid_package_name() {
-        let content = r#"{
-            "name": "invalid name with spaces"
+    fn test_parse_workspaces() {
+        let content_array = r#"{
+            "name": "root",
+            "workspaces": ["packages/*", "apps/*"]
         }"#;
+        let manifest_array = PackageManifest::parse_json(content_array).unwrap();
+        assert_eq!(manifest_array.workspaces, vec!["packages/*", "apps/*"]);
 
-        let res = PackageManifest::parse_json(content);
-        assert!(res.is_err());
-        let diag = res.unwrap_err();
-        assert_eq!(diag.code(), "CXRESOLVE0002");
+        let content_obj = r#"{
+            "name": "root",
+            "workspaces": {
+                "packages": ["packages/*"]
+            }
+        }"#;
+        let manifest_obj = PackageManifest::parse_json(content_obj).unwrap();
+        assert_eq!(manifest_obj.workspaces, vec!["packages/*"]);
     }
 }

@@ -44,42 +44,42 @@ projects; corruption and unsafe archives fail without contaminating the store.
 
 ## Phase 3 — isolated installer (`0.4`)
 
-- isolated tree planner and strict dependency visibility
-- cross-platform link strategy and package binary links
-- transactional reconciliation and project state
-- install, add, remove, list, and initial run/exec command plumbing
-- cold, warm, offline, and reconciliation benchmarks
+- [x] isolated tree planner and strict dependency visibility
+- [x] cross-platform link strategy and package binary links
+- [x] transactional reconciliation and project state
+- [x] install, add, remove, list, and initial run/exec command plumbing
+- [x] cold, warm, offline, and reconciliation benchmarks
 
 Exit: ordinary script-free npm projects run from an isolated install on tier-1
 platforms, and repeat installs primarily reuse the global store.
 
 ## Phase 4 — deterministic lockfile (`0.5`)
 
-- accepted lockfile RFC and canonical serializer
-- graph/importer/peer/platform representation
-- atomic updates, merge-conflict diagnostics, and schema migration framework
-- `--frozen` and `corexpm ci`
+- [x] accepted lockfile RFC and canonical serializer
+- [x] graph/importer/peer/platform representation
+- [x] atomic updates, merge-conflict diagnostics, and schema migration framework
+- [x] `--frozen` and `corexpm ci`
 
 Exit: equivalent inputs produce byte-identical lockfiles and clean machines
 reproduce the same validated graph.
 
 ## Phase 5 — bins, scripts, and Corex Guard baseline (`0.6`)
 
-- npm lifecycle order and executable shim compatibility
-- deny-by-default dependency script policy
-- explicit trust decisions and non-interactive behavior
-- immutable-source build overlays and native artifact cache keys
-- `permissions` and trust explanation UX
+- [x] npm lifecycle order and executable shim compatibility
+- [x] deny-by-default dependency script policy
+- [x] explicit trust decisions and non-interactive behavior
+- [x] immutable-source build overlays and native artifact cache keys
+- [x] `permissions` and trust explanation UX
 
 Exit: supported lifecycle behavior never executes before integrity and policy
 checks; common native/tooling packages work through explicit trust.
 
 ## Phase 6 — workspaces (`0.7`)
 
-- workspace discovery and local protocol resolution
-- topological recursive execution with bounded concurrency
-- filtering, changed, and affected package calculations
-- monorepo install and scheduler performance fixtures
+- [x] workspace discovery and local protocol resolution
+- [x] topological recursive execution with bounded concurrency
+- [x] filtering, changed, and affected package calculations
+- [x] monorepo install and scheduler performance fixtures
 
 Exit: representative monorepos install and execute deterministically with clear
 cycle, failure, and filtering behavior.

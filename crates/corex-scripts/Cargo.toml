@@ -1,6 +1,6 @@
 [package]
-name = "corex-store"
-description = "Immutable package-level Content-Addressed Store (CAS) for CorexPM"
+name = "corex-scripts"
+description = "Lifecycle and package script process execution with secret redaction and build overlays for CorexPM"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,12 +9,9 @@ repository.workspace = true
 
 [dependencies]
 corex-errors = { path = "../corex-errors" }
-corex-fetch = { path = "../corex-fetch" }
+corex-policy = { path = "../corex-policy" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-fs2 = { workspace = true }
 
 [lints]
 workspace = true

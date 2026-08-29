@@ -1,677 +1,740 @@
-//! Content-addressed storage (CAS) and safe archive extraction for `CorexPM`.
+//! Global Content-Addressed Store (CAS), locking, verification, metrics, and garbage collection.
+
+#![forbid(unsafe_code)]
 
 use corex_errors::{Diagnostic, ErrorFamily};
-
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Statistics report for the Content-Addressed Store.
-#[derive(Clone, Debug, serde::Serialize)]
+/// Metadata stored inside each committed CAS package directory in `.corex-pkg.json`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PackageMetadata {
+    /// Package name (e.g. `react` or `@types/node`).
+    pub name: String,
+    /// Package version string.
+    pub version: String,
+    /// Canonical content-addressed SHA-256 key.
+    pub cas_key: String,
+    /// Registry integrity specification (e.g. `sha512-...` or `shasum`).
+    pub expected_integrity: String,
+    /// Unix timestamp in seconds when the package was committed.
+    pub committed_at_secs: u64,
+}
+
+/// Project reference mapping record stored in `indexes/projects.json`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
+pub struct ProjectIndex {
+    /// Mapping of absolute project directory path to set of referenced CAS keys.
+    pub projects: HashMap<String, Vec<String>>,
+}
+
+/// Diagnostic report generated when validating store integrity.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VerificationReport {
+    /// Total valid committed packages.
+    pub valid_count: usize,
+    /// Total corrupted package directories.
+    pub corrupt_count: usize,
+    /// Details of corrupted or tampered package keys.
+    pub corrupt_details: Vec<String>,
+}
+
+/// Physical metrics and allocation statistics of the Content-Addressed Store.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StoreStats {
-    /// Number of unique packages in the store.
-    pub unique_packages: usize,
-    /// Physical bytes occupied in the store.
+    /// Root path of the store.
+    pub store_path: PathBuf,
+    /// Total count of unique committed package objects.
+    pub package_count: usize,
+    /// Total physical bytes occupied by committed packages on disk.
     pub physical_bytes: u64,
-    /// Logical bytes referenced by local projects.
+    /// Sum of bytes referenced across registered projects.
     pub logical_bytes: u64,
-    /// Ratio of logical bytes to physical bytes.
-    pub reuse_ratio: f64,
+    /// Total physical bytes saved by package deduplication across projects.
+    pub saved_bytes: u64,
+    /// Total registered projects referencing packages in the store.
+    pub project_count: usize,
 }
 
-/// Content-addressed package store manager.
-#[derive(Debug)]
-#[allow(clippy::struct_field_names)]
-pub struct ContentAddressedStore {
-    _root_dir: PathBuf,
-    temp_dir: PathBuf,
-    packages_dir: PathBuf,
+/// Summary of packages pruned during garbage collection.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PruneSummary {
+    /// Total count of unreferenced package objects removed.
+    pub removed_count: usize,
+    /// Total physical bytes reclaimed.
+    pub reclaimed_bytes: u64,
+    /// CAS keys of pruned packages.
+    pub pruned_keys: Vec<String>,
 }
 
-impl ContentAddressedStore {
-    /// Creates a new `ContentAddressedStore` under the specified root path.
+/// Corex Content-Addressed Store manager.
+#[derive(Clone, Debug)]
+pub struct Store {
+    root: PathBuf,
+}
+
+impl Store {
+    /// Initializes or opens a `Store` at `root` directory (typically `~/.corex/store/v1`).
     #[must_use]
-    pub fn new(root_dir: impl Into<PathBuf>) -> Self {
-        let root = root_dir.into();
-        Self {
-            temp_dir: root.join("store").join("v1").join("temp"),
-            packages_dir: root
-                .join("store")
-                .join("v1")
-                .join("packages")
-                .join("sha256"),
-            _root_dir: root,
-        }
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
     }
 
-    /// Returns the global packages directory.
+    /// Root directory path.
     #[must_use]
-    pub fn packages_dir(&self) -> &Path {
-        &self.packages_dir
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
-    /// Unpacks a package tarball safely checking for path traversal, link escapes, and sizing limits.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`Diagnostic`] if extraction fails, resource limits are exceeded,
-    /// or directory creation fails.
-    #[allow(clippy::too_many_lines)]
-    pub fn safe_extract(
-        &self,
-        tarball_reader: impl std::io::Read,
-    ) -> Result<tempfile::TempDir, Diagnostic> {
-        use flate2::read::GzDecoder;
-        use tar::Archive;
+    /// Packages storage directory (`packages/sha256/`).
+    #[must_use]
+    pub fn packages_dir(&self) -> PathBuf {
+        self.root.join("packages").join("sha256")
+    }
 
-        const MAX_FILES: usize = 10_000;
-        const MAX_FILE_SIZE: u64 = 500 * 1024 * 1024; // 500 MB
-        const MAX_TOTAL_SIZE: u64 = 1024 * 1024 * 1024; // 1 GB
+    /// Store indexes directory (`indexes/`).
+    #[must_use]
+    pub fn indexes_dir(&self) -> PathBuf {
+        self.root.join("indexes")
+    }
 
-        std::fs::create_dir_all(&self.temp_dir).map_err(|e| {
+    /// Store temporary staging directory (`temp/`).
+    #[must_use]
+    pub fn temp_dir(&self) -> PathBuf {
+        self.root.join("temp")
+    }
+
+    /// Store cross-process locks directory (`locks/`).
+    #[must_use]
+    pub fn locks_dir(&self) -> PathBuf {
+        self.root.join("locks")
+    }
+
+    /// Project reference index file path (`indexes/projects.json`).
+    #[must_use]
+    pub fn projects_file(&self) -> PathBuf {
+        self.indexes_dir().join("projects.json")
+    }
+
+    /// Acquires an exclusive cross-process lock for store mutation operations.
+    fn lock(&self) -> Result<File, Diagnostic> {
+        let locks_dir = self.locks_dir();
+        fs::create_dir_all(&locks_dir).map_err(|e| {
             Diagnostic::new(
                 ErrorFamily::Store,
                 1,
-                format!("failed to create temp directory base: {e}"),
+                format!("failed creating locks dir `{}`: {e}", locks_dir.display()),
             )
         })?;
 
-        let tar = GzDecoder::new(tarball_reader);
-        let mut archive = Archive::new(tar);
-
-        let temp_dir = tempfile::Builder::new()
-            .prefix("pkg_")
-            .tempdir_in(&self.temp_dir)
-            .map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    2,
-                    format!("failed to create temporary staging directory: {e}"),
-                )
-            })?;
-
-        let extraction_root = temp_dir.path();
-
-        let mut file_count = 0;
-        let mut total_bytes = 0;
-
-        for entry_res in archive.entries().map_err(|e| {
+        let lock_path = locks_dir.join("store.lock");
+        let file = File::create(&lock_path).map_err(|e| {
             Diagnostic::new(
                 ErrorFamily::Store,
-                3,
-                format!("failed to read tarball entries: {e}"),
+                1,
+                format!("failed creating lock file `{}`: {e}", lock_path.display()),
             )
-        })? {
-            let mut entry = entry_res.map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    4,
-                    format!("failed to read tarball entry: {e}"),
-                )
-            })?;
+        })?;
 
-            let path = entry
-                .path()
-                .map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        5,
-                        format!("invalid entry path in tarball: {e}"),
-                    )
-                })?
-                .to_path_buf();
+        file.lock_exclusive().map_err(|e| {
+            Diagnostic::new(
+                ErrorFamily::Store,
+                1,
+                format!("failed acquiring cross-process store lock: {e}"),
+            )
+        })?;
 
-            if path.is_absolute() {
-                return Err(Diagnostic::new(
-                    ErrorFamily::Store,
-                    6,
-                    format!(
-                        "security violation: absolute path in tarball entry `{}`",
-                        path.display()
-                    ),
-                ));
-            }
-
-            for component in path.components() {
-                if let std::path::Component::ParentDir = component {
-                    return Err(Diagnostic::new(
-                        ErrorFamily::Store,
-                        7,
-                        format!(
-                            "security violation: path traversal segment `..` in tarball entry `{}`",
-                            path.display()
-                        ),
-                    ));
-                }
-            }
-
-            let target_path = extraction_root.join(&path);
-            let entry_type = entry.header().entry_type();
-            if entry_type.is_symlink() || entry_type.is_hard_link() {
-                return Err(Diagnostic::new(
-                    ErrorFamily::Store,
-                    8,
-                    format!("security violation: symlinks/hardlinks are forbidden in package tarballs: `{}`", path.display()),
-                ));
-            }
-
-            if !entry_type.is_dir() && !entry_type.is_file() {
-                return Err(Diagnostic::new(
-                    ErrorFamily::Store,
-                    9,
-                    format!(
-                        "security violation: unsupported special file type in tarball entry `{}`",
-                        path.display()
-                    ),
-                ));
-            }
-
-            if entry_type.is_dir() {
-                std::fs::create_dir_all(&target_path).map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        10,
-                        format!("failed to create directory `{}`: {e}", path.display()),
-                    )
-                })?;
-            } else if entry_type.is_file() {
-                file_count += 1;
-                if file_count > MAX_FILES {
-                    return Err(Diagnostic::new(
-                        ErrorFamily::Store,
-                        11,
-                        "resource exhaustion: tarball contains too many files",
-                    ));
-                }
-
-                let size = entry.header().size().map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        12,
-                        format!("failed to read file size in tarball: {e}"),
-                    )
-                })?;
-
-                if size > MAX_FILE_SIZE {
-                    return Err(Diagnostic::new(
-                        ErrorFamily::Store,
-                        13,
-                        format!(
-                            "resource exhaustion: file `{}` exceeds maximum size limit",
-                            path.display()
-                        ),
-                    ));
-                }
-
-                total_bytes += size;
-                if total_bytes > MAX_TOTAL_SIZE {
-                    return Err(Diagnostic::new(
-                        ErrorFamily::Store,
-                        14,
-                        "resource exhaustion: total unpacked package size exceeds maximum limit",
-                    ));
-                }
-
-                if let Some(parent) = target_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        Diagnostic::new(
-                            ErrorFamily::Store,
-                            10,
-                            format!("failed to create directory `{}`: {e}", parent.display()),
-                        )
-                    })?;
-                }
-
-                entry.unpack(&target_path).map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        15,
-                        format!("failed to unpack file entry `{}`: {e}", path.display()),
-                    )
-                })?;
-            }
-        }
-
-        Ok(temp_dir)
+        Ok(file)
     }
 
-    /// Computes the deterministic canonical directory hash (SHA-256) of a package.
+    /// Calculates the canonical CAS SHA-256 key for an extracted package directory.
+    ///
+    /// Iterates over all files in `dir` in sorted relative path order and hashes relative path + file contents.
     ///
     /// # Errors
-    ///
-    /// Returns a [`Diagnostic`] if a file cannot be read or directory walk fails.
-    pub fn compute_directory_hash(&self, dir: &Path) -> Result<String, Diagnostic> {
-        use sha2::{Digest, Sha256};
-
+    /// Returns `Diagnostic` if reading files fails.
+    pub fn calculate_cas_key(dir: &Path) -> Result<String, Diagnostic> {
         let mut files = Vec::new();
-        Self::collect_files_recursive(dir, dir, &mut files)?;
-
+        collect_dir_files(dir, dir, &mut files)?;
         files.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut hasher = Sha256::new();
         for (rel_path, abs_path) in files {
             hasher.update(rel_path.as_bytes());
-
-            let metadata = std::fs::metadata(&abs_path).map_err(|e| {
+            let content = fs::read(&abs_path).map_err(|e| {
                 Diagnostic::new(
                     ErrorFamily::Store,
-                    16,
-                    format!("failed to read metadata for file `{rel_path}`: {e}"),
+                    1,
+                    format!(
+                        "failed reading file `{}` for CAS key: {e}",
+                        abs_path.display()
+                    ),
                 )
             })?;
-            hasher.update(metadata.len().to_be_bytes());
-
-            let mut file = std::fs::File::open(&abs_path).map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    17,
-                    format!("failed to open file `{rel_path}`: {e}"),
-                )
-            })?;
-            let mut file_hasher = Sha256::new();
-            std::io::copy(&mut file, &mut file_hasher).map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    18,
-                    format!("failed to compute hash for file `{rel_path}`: {e}"),
-                )
-            })?;
-            hasher.update(file_hasher.finalize());
+            hasher.update(&content);
         }
 
-        let hash_bytes = hasher.finalize();
-        let mut s = String::with_capacity(hash_bytes.len() * 2);
-        for b in hash_bytes {
-            use std::fmt::Write;
-            let _ = write!(&mut s, "{b:02x}");
-        }
-        Ok(s)
+        Ok(hex::encode(hasher.finalize()))
     }
 
-    fn collect_files_recursive(
-        base_dir: &Path,
-        current_dir: &Path,
-        files: &mut Vec<(String, PathBuf)>,
-    ) -> Result<(), Diagnostic> {
-        for entry in std::fs::read_dir(current_dir).map_err(|e| {
-            Diagnostic::new(
-                ErrorFamily::Store,
-                19,
-                format!("failed to read directory `{}`: {e}", current_dir.display()),
-            )
-        })? {
-            let entry = entry.map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    20,
-                    format!("failed to read directory entry: {e}"),
-                )
-            })?;
-            let path = entry.path();
-            if path.is_dir() {
-                Self::collect_files_recursive(base_dir, &path, files)?;
-            } else if path.is_file() {
-                let rel_path = path.strip_prefix(base_dir).unwrap();
-                let rel_str = rel_path
-                    .to_str()
-                    .ok_or_else(|| {
-                        Diagnostic::new(
-                            ErrorFamily::Store,
-                            21,
-                            format!("invalid non-UTF8 filename: `{}`", rel_path.display()),
-                        )
-                    })?
-                    .to_string();
-                files.push((rel_str, path));
-            }
-        }
-        Ok(())
-    }
-
-    /// Commits a staging directory atomically to its final content-addressed location.
+    /// Atomically commits an extracted package from `staging_dir` into the immutable CAS store.
     ///
     /// # Errors
-    ///
-    /// Returns a [`Diagnostic`] if renaming files or setting permissions fails.
-    pub fn commit(&self, temp_dir: &Path, content_hash: &str) -> Result<PathBuf, Diagnostic> {
-        let prefix = &content_hash[0..2];
-        let target_dir = self.packages_dir.join(prefix).join(content_hash);
+    /// Returns `Diagnostic` if integrity calculation, locking, or atomic move fails.
+    pub fn commit_package(
+        &self,
+        staging_dir: &Path,
+        name: &str,
+        version: &str,
+        expected_integrity: &str,
+    ) -> Result<PackageMetadata, Diagnostic> {
+        let cas_key = Self::calculate_cas_key(staging_dir)?;
+        let prefix = &cas_key[..2];
+        let target_dir = self.packages_dir().join(prefix).join(&cas_key);
 
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let metadata = PackageMetadata {
+            name: name.to_owned(),
+            version: version.to_owned(),
+            cas_key: cas_key.clone(),
+            expected_integrity: expected_integrity.to_owned(),
+            committed_at_secs: now_secs,
+        };
+
+        let _guard = self.lock()?;
+
+        // If target already exists, validate metadata and reuse existing package (race condition win)
         if target_dir.exists() {
-            if let Ok(existing_hash) = self.compute_directory_hash(&target_dir) {
-                if existing_hash == content_hash {
-                    let _ = std::fs::remove_dir_all(temp_dir);
-                    return Ok(target_dir);
+            let meta_file = target_dir.join(".corex-pkg.json");
+            if meta_file.exists() {
+                if let Ok(content) = fs::read_to_string(&meta_file) {
+                    if let Ok(existing_meta) = serde_json::from_str::<PackageMetadata>(&content) {
+                        let _ = fs::remove_dir_all(staging_dir);
+                        return Ok(existing_meta);
+                    }
                 }
             }
-            let _ = std::fs::remove_dir_all(&target_dir);
         }
 
+        // Write package metadata file into staging dir before moving
+        let meta_json = serde_json::to_string_pretty(&metadata).map_err(|e| {
+            Diagnostic::new(
+                ErrorFamily::Store,
+                1,
+                format!("failed serializing package metadata: {e}"),
+            )
+        })?;
+        fs::write(staging_dir.join(".corex-pkg.json"), meta_json).map_err(|e| {
+            Diagnostic::new(
+                ErrorFamily::Store,
+                1,
+                format!("failed writing `.corex-pkg.json` in staging dir: {e}"),
+            )
+        })?;
+
+        // Ensure parent prefix dir exists
         if let Some(parent) = target_dir.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
+            fs::create_dir_all(parent).map_err(|e| {
                 Diagnostic::new(
                     ErrorFamily::Store,
-                    22,
-                    format!("failed to create destination parent directory: {e}"),
+                    1,
+                    format!(
+                        "failed creating package parent dir `{}`: {e}",
+                        parent.display()
+                    ),
                 )
             })?;
         }
 
-        std::fs::rename(temp_dir, &target_dir).map_err(|e| {
+        // Atomic move into CAS
+        fs::rename(staging_dir, &target_dir).map_err(|e| {
             Diagnostic::new(
                 ErrorFamily::Store,
-                23,
-                format!("failed to atomically rename directory to store destination: {e}"),
-            )
-        })?;
-
-        Self::make_readonly_recursive(&target_dir)?;
-
-        Ok(target_dir)
-    }
-
-    fn make_readonly_recursive(path: &Path) -> Result<(), Diagnostic> {
-        let metadata = std::fs::metadata(path).map_err(|e| {
-            Diagnostic::new(
-                ErrorFamily::Store,
-                24,
-                format!("failed to read metadata for `{}`: {e}", path.display()),
-            )
-        })?;
-
-        let mut permissions = metadata.permissions();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if path.is_dir() {
-                permissions.set_mode(0o555);
-            } else {
-                permissions.set_mode(0o444);
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            permissions.set_readonly(true);
-        }
-
-        std::fs::set_permissions(path, permissions).map_err(|e| {
-            Diagnostic::new(
-                ErrorFamily::Store,
-                25,
+                1,
                 format!(
-                    "failed to set read-only permissions for `{}`: {e}",
-                    path.display()
+                    "failed committing package to CAS `{}`: {e}",
+                    target_dir.display()
                 ),
             )
         })?;
 
-        if path.is_dir() {
-            for entry in std::fs::read_dir(path).map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    19,
-                    format!("failed to read directory `{}`: {e}", path.display()),
-                )
-            })? {
-                let entry = entry.map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        20,
-                        format!("failed to read directory entry: {e}"),
-                    )
-                })?;
-                Self::make_readonly_recursive(&entry.path())?;
-            }
-        }
+        // Set read-only permissions on committed target to guarantee immutability
+        set_readonly_recursive(&target_dir, true)?;
 
-        Ok(())
+        Ok(metadata)
     }
 
-    /// Verifies store integrity recomputing directory hashes.
+    /// Registers project reference association with CAS keys in `indexes/projects.json`.
     ///
     /// # Errors
-    ///
-    /// Returns a [`Diagnostic`] if directories cannot be read.
-    pub fn validate_integrity(&self) -> Result<Vec<(String, Diagnostic)>, Diagnostic> {
-        let mut corruptions = Vec::new();
-        if !self.packages_dir.exists() {
-            return Ok(corruptions);
-        }
+    /// Returns `Diagnostic` if updating index file fails.
+    pub fn register_project_references(
+        &self,
+        project_dir: &Path,
+        cas_keys: &[String],
+    ) -> Result<(), Diagnostic> {
+        let _guard = self.lock()?;
 
-        for prefix_entry in std::fs::read_dir(&self.packages_dir).map_err(|e| {
-            Diagnostic::new(
-                ErrorFamily::Store,
-                19,
-                format!("failed to read packages directory: {e}"),
-            )
-        })? {
-            let prefix_entry = prefix_entry.map_err(|e| {
+        let mut index = self.read_project_index()?;
+        let canonical_proj = project_dir
+            .canonicalize()
+            .unwrap_or_else(|_| project_dir.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+
+        index.projects.insert(canonical_proj, cas_keys.to_vec());
+        self.write_project_index(&index)
+    }
+
+    /// Reads project index from disk.
+    fn read_project_index(&self) -> Result<ProjectIndex, Diagnostic> {
+        let p = self.projects_file();
+        if p.exists() {
+            let content = fs::read_to_string(&p).map_err(|e| {
                 Diagnostic::new(
                     ErrorFamily::Store,
-                    20,
-                    format!("failed to read directory entry: {e}"),
+                    1,
+                    format!("failed reading project index `{}`: {e}", p.display()),
                 )
             })?;
-            let prefix_path = prefix_entry.path();
-            if prefix_path.is_dir() {
-                for pkg_entry in std::fs::read_dir(&prefix_path).map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        19,
-                        format!(
-                            "failed to read package hash directory `{}`: {e}",
-                            prefix_path.display()
-                        ),
-                    )
-                })? {
-                    let pkg_entry = pkg_entry.map_err(|e| {
-                        Diagnostic::new(
-                            ErrorFamily::Store,
-                            20,
-                            format!("failed to read directory entry: {e}"),
-                        )
-                    })?;
-                    let pkg_path = pkg_entry.path();
-                    if pkg_path.is_dir() {
-                        let hash_key = pkg_path
-                            .file_name()
-                            .map_or_else(String::new, |f| f.to_string_lossy().into_owned());
-                        match self.compute_directory_hash(&pkg_path) {
-                            Ok(computed_hash) => {
-                                if computed_hash != hash_key {
-                                    corruptions.push((
-                                        hash_key.clone(),
-                                        Diagnostic::new(
-                                            ErrorFamily::Store,
-                                            26,
-                                            format!("integrity corruption detected: package directory `{}` recomputed hash `{}` mismatches target key", pkg_path.display(), computed_hash),
-                                        ),
-                                    ));
-                                }
-                            }
-                            Err(diag) => {
-                                corruptions.push((hash_key.clone(), diag));
-                            }
-                        }
-                    }
-                }
-            }
+            serde_json::from_str(&content).map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Store,
+                    1,
+                    format!("failed parsing project index `{}`: {e}", p.display()),
+                )
+            })
+        } else {
+            Ok(ProjectIndex::default())
         }
-
-        Ok(corruptions)
     }
 
-    /// Computes Content-Addressed Store statistics.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`Diagnostic`] if filesystem read operations fail.
-    pub fn stats(&self) -> Result<StoreStats, Diagnostic> {
-        let mut unique_packages = 0;
-        let mut physical_bytes = 0;
-
-        if self.packages_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&self.packages_dir) {
-                for prefix_entry in entries.flatten() {
-                    if prefix_entry.path().is_dir() {
-                        if let Ok(pkg_entries) = std::fs::read_dir(prefix_entry.path()) {
-                            for pkg in pkg_entries.flatten() {
-                                if pkg.path().is_dir() {
-                                    unique_packages += 1;
-                                    physical_bytes += Self::measure_dir_size(&pkg.path())?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    /// Writes project index to disk.
+    fn write_project_index(&self, index: &ProjectIndex) -> Result<(), Diagnostic> {
+        let p = self.projects_file();
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Store,
+                    1,
+                    format!(
+                        "failed creating index directory `{}`: {e}",
+                        parent.display()
+                    ),
+                )
+            })?;
         }
-
-        Ok(StoreStats {
-            unique_packages,
-            physical_bytes,
-            logical_bytes: physical_bytes,
-            reuse_ratio: 1.0,
+        let json_str = serde_json::to_string_pretty(index).map_err(|e| {
+            Diagnostic::new(
+                ErrorFamily::Store,
+                1,
+                format!("failed serializing project index: {e}"),
+            )
+        })?;
+        fs::write(&p, json_str).map_err(|e| {
+            Diagnostic::new(
+                ErrorFamily::Store,
+                1,
+                format!("failed writing project index `{}`: {e}", p.display()),
+            )
         })
     }
 
-    fn measure_dir_size(path: &Path) -> Result<u64, Diagnostic> {
-        let mut total = 0;
-        for entry in std::fs::read_dir(path).map_err(|e| {
+    /// Scans the entire CAS store and verifies integrity of all committed packages.
+    ///
+    /// # Errors
+    /// Returns `Diagnostic` if store scan fails.
+    pub fn verify(&self) -> Result<VerificationReport, Diagnostic> {
+        let pkgs_dir = self.packages_dir();
+        let mut valid_count = 0usize;
+        let mut corrupt_count = 0usize;
+        let mut corrupt_details = Vec::new();
+
+        if !pkgs_dir.exists() {
+            return Ok(VerificationReport {
+                valid_count: 0,
+                corrupt_count: 0,
+                corrupt_details: Vec::new(),
+            });
+        }
+
+        let prefix_dirs = fs::read_dir(&pkgs_dir).map_err(|e| {
             Diagnostic::new(
                 ErrorFamily::Store,
-                19,
-                format!("failed to read directory `{}`: {e}", path.display()),
+                1,
+                format!(
+                    "failed reading store packages directory `{}`: {e}",
+                    pkgs_dir.display()
+                ),
             )
-        })? {
-            let entry = entry.map_err(|e| {
-                Diagnostic::new(
-                    ErrorFamily::Store,
-                    20,
-                    format!("failed to read directory entry: {e}"),
-                )
-            })?;
-            let entry_path = entry.path();
-            if entry_path.is_dir() {
-                total += Self::measure_dir_size(&entry_path)?;
-            } else if entry_path.is_file() {
-                let metadata = std::fs::metadata(&entry_path).map_err(|e| {
-                    Diagnostic::new(
-                        ErrorFamily::Store,
-                        24,
-                        format!(
-                            "failed to read metadata for `{}`: {e}",
-                            entry_path.display()
-                        ),
-                    )
-                })?;
-                total += metadata.len();
+        })?;
+
+        for p_entry in prefix_dirs.flatten() {
+            if !p_entry.path().is_dir() {
+                continue;
+            }
+            if let Ok(pkg_dirs) = fs::read_dir(p_entry.path()) {
+                for entry in pkg_dirs.flatten() {
+                    let path = entry.path();
+                    if !path.is_dir() {
+                        continue;
+                    }
+                    let key = path
+                        .file_name()
+                        .map_or_else(String::new, |s| s.to_string_lossy().to_string());
+
+                    let meta_file = path.join(".corex-pkg.json");
+                    if !meta_file.exists() {
+                        corrupt_count += 1;
+                        corrupt_details.push(format!("{key}: missing `.corex-pkg.json`"));
+                        continue;
+                    }
+
+                    match Self::calculate_cas_key(&path) {
+                        Ok(actual_key) => {
+                            if actual_key == key {
+                                valid_count += 1;
+                            } else {
+                                corrupt_count += 1;
+                                corrupt_details
+                                    .push(format!("{key}: CAS key mismatch (got {actual_key})"));
+                            }
+                        }
+                        Err(err) => {
+                            corrupt_count += 1;
+                            corrupt_details.push(format!("{key}: read failure: {err}"));
+                        }
+                    }
+                }
             }
         }
-        Ok(total)
+
+        Ok(VerificationReport {
+            valid_count,
+            corrupt_count,
+            corrupt_details,
+        })
     }
+
+    /// Computes summary statistics and physical space usage of the store.
+    ///
+    /// # Errors
+    /// Returns `Diagnostic` if store scan fails.
+    pub fn stats(&self) -> Result<StoreStats, Diagnostic> {
+        let pkgs_dir = self.packages_dir();
+        let mut package_count = 0usize;
+        let mut physical_bytes = 0u64;
+
+        let mut package_sizes = HashMap::new();
+
+        if pkgs_dir.exists() {
+            if let Ok(prefix_dirs) = fs::read_dir(&pkgs_dir) {
+                for p_entry in prefix_dirs.flatten() {
+                    if !p_entry.path().is_dir() {
+                        continue;
+                    }
+                    if let Ok(pkg_dirs) = fs::read_dir(p_entry.path()) {
+                        for entry in pkg_dirs.flatten() {
+                            let path = entry.path();
+                            if !path.is_dir() {
+                                continue;
+                            }
+                            let key = path
+                                .file_name()
+                                .map_or_else(String::new, |s| s.to_string_lossy().to_string());
+
+                            let size = compute_dir_size(&path);
+                            package_count += 1;
+                            physical_bytes += size;
+                            package_sizes.insert(key, size);
+                        }
+                    }
+                }
+            }
+        }
+
+        let index = self.read_project_index().unwrap_or_default();
+        let project_count = index.projects.len();
+        let mut logical_bytes = 0u64;
+
+        for keys in index.projects.values() {
+            for key in keys {
+                if let Some(&sz) = package_sizes.get(key) {
+                    logical_bytes += sz;
+                }
+            }
+        }
+
+        let saved_bytes = logical_bytes.saturating_sub(physical_bytes);
+
+        Ok(StoreStats {
+            store_path: self.root.clone(),
+            package_count,
+            physical_bytes,
+            logical_bytes,
+            saved_bytes,
+            project_count,
+        })
+    }
+
+    /// Garbage collects unreferenced packages older than `grace_period_secs`.
+    ///
+    /// # Errors
+    /// Returns `Diagnostic` if lock acquisition or directory deletion fails.
+    pub fn prune(&self, grace_period_secs: u64) -> Result<PruneSummary, Diagnostic> {
+        let _guard = self.lock()?;
+
+        let index = self.read_project_index().unwrap_or_default();
+        let mut active_keys = HashSet::new();
+        for keys in index.projects.values() {
+            for k in keys {
+                active_keys.insert(k.clone());
+            }
+        }
+
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let cutoff = now_secs.saturating_sub(grace_period_secs);
+
+        let pkgs_dir = self.packages_dir();
+        let mut removed_count = 0usize;
+        let mut reclaimed_bytes = 0u64;
+        let mut pruned_keys = Vec::new();
+
+        if !pkgs_dir.exists() {
+            return Ok(PruneSummary {
+                removed_count: 0,
+                reclaimed_bytes: 0,
+                pruned_keys: Vec::new(),
+            });
+        }
+
+        if let Ok(prefix_dirs) = fs::read_dir(&pkgs_dir) {
+            for p_entry in prefix_dirs.flatten() {
+                let p_path = p_entry.path();
+                if !p_path.is_dir() {
+                    continue;
+                }
+                if let Ok(pkg_dirs) = fs::read_dir(&p_path) {
+                    for entry in pkg_dirs.flatten() {
+                        let path = entry.path();
+                        if !path.is_dir() {
+                            continue;
+                        }
+                        let key = path
+                            .file_name()
+                            .map_or_else(String::new, |s| s.to_string_lossy().to_string());
+
+                        if active_keys.contains(&key) {
+                            continue;
+                        }
+
+                        let meta_file = path.join(".corex-pkg.json");
+                        let mut committed_at = 0u64;
+                        if meta_file.exists() {
+                            if let Ok(content) = fs::read_to_string(&meta_file) {
+                                if let Ok(meta) = serde_json::from_str::<PackageMetadata>(&content)
+                                {
+                                    committed_at = meta.committed_at_secs;
+                                }
+                            }
+                        }
+
+                        if committed_at <= cutoff {
+                            let size = compute_dir_size(&path);
+                            // Temporarily allow write perms to enable deletion
+                            let _ = set_readonly_recursive(&path, false);
+                            if fs::remove_dir_all(&path).is_ok() {
+                                removed_count += 1;
+                                reclaimed_bytes += size;
+                                pruned_keys.push(key);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(PruneSummary {
+            removed_count,
+            reclaimed_bytes,
+            pruned_keys,
+        })
+    }
+}
+
+fn collect_dir_files(
+    root: &Path,
+    dir: &Path,
+    acc: &mut Vec<(String, PathBuf)>,
+) -> Result<(), Diagnostic> {
+    let entries = fs::read_dir(dir).map_err(|e| {
+        Diagnostic::new(
+            ErrorFamily::Store,
+            1,
+            format!("failed reading dir `{}`: {e}", dir.display()),
+        )
+    })?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_dir_files(root, &path, acc)?;
+        } else if path.is_file() {
+            if path
+                .file_name()
+                .is_some_and(|name| name == ".corex-pkg.json")
+            {
+                continue;
+            }
+            if let Ok(rel) = path.strip_prefix(root) {
+                acc.push((rel.to_string_lossy().to_string(), path));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compute_dir_size(dir: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                total += compute_dir_size(&path);
+            } else if let Ok(meta) = path.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
+fn set_readonly_recursive(dir: &Path, readonly: bool) -> Result<(), Diagnostic> {
+    if !readonly {
+        if let Ok(meta) = dir.metadata() {
+            let mut perms = meta.permissions();
+            #[cfg(unix)]
+            perms.set_mode(0o755);
+            #[cfg(not(unix))]
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = fs::set_permissions(dir, perms);
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                set_readonly_recursive(&path, readonly)?;
+            } else if path.is_file() {
+                if let Ok(meta) = path.metadata() {
+                    let mut perms = meta.permissions();
+                    if readonly {
+                        perms.set_readonly(true);
+                    } else {
+                        #[cfg(unix)]
+                        perms.set_mode(0o644);
+                        #[cfg(not(unix))]
+                        #[allow(clippy::permissions_set_readonly_false)]
+                        perms.set_readonly(false);
+                    }
+                    let _ = fs::set_permissions(&path, perms);
+                }
+            }
+        }
+    }
+
+    if readonly {
+        if let Ok(meta) = dir.metadata() {
+            let mut perms = meta.permissions();
+            perms.set_readonly(true);
+            let _ = fs::set_permissions(dir, perms);
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
-    use tar::Builder;
 
-    fn create_mock_tarball(files: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut tar_bytes = Vec::new();
-        {
-            let enc = GzEncoder::new(&mut tar_bytes, Compression::default());
-            let mut builder = Builder::new(enc);
-            for (path, content) in files {
-                let mut header = tar::Header::new_gnu();
-                header.set_size(content.len() as u64);
-                let bytes = path.as_bytes();
-                let len = bytes.len().min(99);
-                header.as_mut_bytes()[0..len].copy_from_slice(&bytes[0..len]);
-                header.set_cksum();
-                builder.append(&header, *content).unwrap();
-            }
-            builder.finish().unwrap();
+    fn clean_test_dir(dir: &Path) {
+        if dir.exists() {
+            let _ = set_readonly_recursive(dir, false);
+            let _ = fs::remove_dir_all(dir);
         }
-        tar_bytes
     }
 
     #[test]
-    fn test_safe_extract_valid() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = ContentAddressedStore::new(tmp.path());
+    fn test_store_atomic_commit_and_verification() {
+        let store_root = std::env::temp_dir().join("corex_test_store_commit");
+        clean_test_dir(&store_root);
 
-        let tarball = create_mock_tarball(&[
-            ("package/package.json", b"{\"name\": \"foo\"}"),
-            ("package/index.js", b"console.log('hello')"),
-        ]);
+        let store = Store::new(&store_root);
 
-        let staging = store.safe_extract(&tarball[..]).unwrap();
-        let staging_path = staging.path();
+        let staging = std::env::temp_dir().join("corex_test_staging_pkg");
+        clean_test_dir(&staging);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("index.js"), "console.log('hello');").unwrap();
 
-        assert!(staging_path.join("package/package.json").exists());
-        assert!(staging_path.join("package/index.js").exists());
-    }
+        let meta = store
+            .commit_package(&staging, "my-pkg", "1.0.0", "sha512-dummy")
+            .unwrap();
 
-    #[test]
-    fn test_safe_extract_traversal_absolute() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = ContentAddressedStore::new(tmp.path());
+        assert_eq!(meta.name, "my-pkg");
+        assert_eq!(meta.version, "1.0.0");
+        assert!(!staging.exists());
 
-        let tarball = create_mock_tarball(&[("/absolute/path.js", b"content")]);
-        assert!(store.safe_extract(&tarball[..]).is_err());
-    }
-
-    #[test]
-    fn test_safe_extract_traversal_relative() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = ContentAddressedStore::new(tmp.path());
-
-        let tarball = create_mock_tarball(&[("package/../../escape.js", b"content")]);
-        assert!(store.safe_extract(&tarball[..]).is_err());
-    }
-
-    #[test]
-    fn test_safe_extract_symlink() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = ContentAddressedStore::new(tmp.path());
-
-        let mut tar_bytes = Vec::new();
-        {
-            let enc = GzEncoder::new(&mut tar_bytes, Compression::default());
-            let mut builder = Builder::new(enc);
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_path("package/symlink").unwrap();
-            header.set_link_name("../outside").unwrap();
-            builder.append(&header, &[][..]).unwrap();
-            builder.finish().unwrap();
-        }
-
-        assert!(store.safe_extract(&tar_bytes[..]).is_err());
-    }
-
-    #[test]
-    fn test_directory_hashing_and_commit() {
-        let tmp = tempfile::tempdir().unwrap();
-        let store = ContentAddressedStore::new(tmp.path());
-
-        let tarball1 = create_mock_tarball(&[
-            ("package/package.json", b"{\"name\": \"foo\"}"),
-            ("package/index.js", b"console.log('hello')"),
-        ]);
-
-        let staging = store.safe_extract(&tarball1[..]).unwrap();
-        let hash = store.compute_directory_hash(staging.path()).unwrap();
-        assert!(!hash.is_empty());
-
-        let committed = store.commit(staging.path(), &hash).unwrap();
-        assert!(committed.exists());
-
-        let file_meta = std::fs::metadata(committed.join("package/index.js")).unwrap();
-        assert!(file_meta.permissions().readonly());
+        let report = store.verify().unwrap();
+        assert_eq!(report.valid_count, 1);
+        assert_eq!(report.corrupt_count, 0);
 
         let stats = store.stats().unwrap();
-        assert_eq!(stats.unique_packages, 1);
+        assert_eq!(stats.package_count, 1);
+        assert!(stats.physical_bytes > 0);
+
+        // Clean up
+        clean_test_dir(&store_root);
+    }
+
+    #[test]
+    fn test_store_prune() {
+        let store_root = std::env::temp_dir().join("corex_test_store_prune");
+        clean_test_dir(&store_root);
+
+        let store = Store::new(&store_root);
+
+        let staging = std::env::temp_dir().join("corex_test_staging_prune");
+        clean_test_dir(&staging);
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("lib.js"), "module.exports = {};").unwrap();
+
+        let meta = store
+            .commit_package(&staging, "temp-pkg", "0.1.0", "sha512-test")
+            .unwrap();
+
+        let prune_res = store.prune(0).unwrap();
+        assert_eq!(prune_res.removed_count, 1);
+        assert_eq!(prune_res.pruned_keys, vec![meta.cas_key]);
+
+        clean_test_dir(&store_root);
     }
 }

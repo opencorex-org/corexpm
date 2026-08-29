@@ -1,6 +1,6 @@
 [package]
-name = "corex-store"
-description = "Immutable package-level Content-Addressed Store (CAS) for CorexPM"
+name = "corex-policy"
+description = "Corex Guard baseline trust policy evaluation and permissions reporting for CorexPM"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,12 +9,13 @@ repository.workspace = true
 
 [dependencies]
 corex-errors = { path = "../corex-errors" }
-corex-fetch = { path = "../corex-fetch" }
+corex-manifest = { path = "../corex-manifest" }
+corex-graph = { path = "../corex-graph" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-fs2 = { workspace = true }
+
+[dev-dependencies]
+corex-config = { path = "../corex-config" }
 
 [lints]
 workspace = true

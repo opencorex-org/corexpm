@@ -51,6 +51,7 @@ enum CliOutput<T> {
     Error { error: Diagnostic },
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct ParsedArgs {
     command: Option<String>,
     command_args: Vec<String>,
@@ -61,6 +62,14 @@ struct ParsedArgs {
     help: bool,
     version: bool,
     fixtures: Option<String>,
+    target_workspaces: Vec<String>,
+    include_patterns: Vec<String>,
+    exclude_patterns: Vec<String>,
+    all: bool,
+    changed: bool,
+    affected: bool,
+    concurrency: Option<usize>,
+    fail_fast: Option<bool>,
 }
 
 fn main() -> ExitCode {
@@ -112,6 +121,7 @@ fn print_error(diag: Diagnostic, use_json: bool) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnostic> {
     let mut command = None;
     let mut command_args = Vec::new();
@@ -122,6 +132,14 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
     let mut help = false;
     let mut version = false;
     let mut fixtures = None;
+    let mut target_workspaces = Vec::new();
+    let mut include_patterns = Vec::new();
+    let mut exclude_patterns = Vec::new();
+    let mut all = false;
+    let mut changed = false;
+    let mut affected = false;
+    let mut concurrency = None;
+    let mut fail_fast = None;
 
     let mut iter = args.peekable();
     while let Some(arg) = iter.next() {
@@ -134,6 +152,60 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
             }
             "--no-offline" => {
                 offline = Some(false);
+            }
+            "--all" => {
+                all = true;
+            }
+            "--changed" => {
+                changed = true;
+            }
+            "--affected" => {
+                affected = true;
+            }
+            "--fail-fast" => {
+                fail_fast = Some(true);
+            }
+            "--no-fail-fast" => {
+                fail_fast = Some(false);
+            }
+            "-w" | "--workspace" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorFamily::Cli,
+                        1,
+                        "missing value for `--workspace` option",
+                    )
+                })?;
+                target_workspaces.push(val);
+            }
+            "--include" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(ErrorFamily::Cli, 1, "missing value for `--include` option")
+                })?;
+                include_patterns.push(val);
+            }
+            "--exclude" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(ErrorFamily::Cli, 1, "missing value for `--exclude` option")
+                })?;
+                exclude_patterns.push(val);
+            }
+            "--concurrency" => {
+                let val = iter.next().ok_or_else(|| {
+                    Diagnostic::new(
+                        ErrorFamily::Cli,
+                        1,
+                        "missing value for `--concurrency` option",
+                    )
+                })?;
+                let count = val.parse::<usize>().map_err(|_| {
+                    Diagnostic::new(
+                        ErrorFamily::Cli,
+                        1,
+                        format!("invalid concurrency value `{val}`"),
+                    )
+                })?;
+                concurrency = Some(count);
             }
             "--linker" => {
                 let val = iter.next().ok_or_else(|| {
@@ -212,6 +284,14 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<ParsedArgs, Diagnost
         help,
         version,
         fixtures,
+        target_workspaces,
+        include_patterns,
+        exclude_patterns,
+        all,
+        changed,
+        affected,
+        concurrency,
+        fail_fast,
     })
 }
 
@@ -281,6 +361,14 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
         help,
         version,
         fixtures,
+        target_workspaces,
+        include_patterns,
+        exclude_patterns,
+        all,
+        changed,
+        affected,
+        concurrency,
+        fail_fast,
     } = parsed;
 
     let config = resolve_config(None, linker, scripts, offline)?;
@@ -451,6 +539,9 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
             }
         }
         "install" | "i" => {
+            let is_frozen = command_args
+                .iter()
+                .any(|a| a == "--frozen" || a == "--frozen-lockfile" || a == "--immutable");
             let fixtures_path =
                 fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
 
@@ -461,40 +552,472 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                     format!("failed to read current working directory: {e}"),
                 )
             })?;
-            let manifest_path = project_root.join("package.json");
-            if !manifest_path.exists() {
-                return Err(Diagnostic::new(
-                    ErrorFamily::Resolve,
-                    1,
-                    "package.json not found in the current directory",
-                )
-                .with_help("run `corexpm init` or create a package.json manually"));
-            }
 
-            let manifest_content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+            let result = if is_frozen {
+                corex_core::install_project_frozen(&project_root, &context, &fixtures_path)?
+            } else {
+                corex_core::install_project(&project_root, &context, &fixtures_path)?
+            };
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                if result.reconciled {
+                    println!(
+                        "Reconciled `{}` in {}ms (up to date)",
+                        result.manifest_name, result.elapsed_ms
+                    );
+                } else {
+                    println!(
+                        "Installed `{}` in {}ms (frozen: {is_frozen})",
+                        result.manifest_name, result.elapsed_ms
+                    );
+                    println!("  Resolved packages:     {}", result.resolved_count);
+                    println!(
+                        "  Direct dependencies:   {}",
+                        result.summary.direct_dependencies
+                    );
+                    println!(
+                        "  Virtual instances:     {}",
+                        result.summary.virtual_instances
+                    );
+                    println!("  Symlinks created:      {}", result.summary.total_links);
+                    println!("  Binary shims linked:   {}", result.summary.binary_links);
+                }
+                Ok(None)
+            }
+        }
+        "ci" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
                 Diagnostic::new(
-                    ErrorFamily::Resolve,
+                    ErrorFamily::Cli,
                     2,
-                    format!(
-                        "failed to read package.json at `{}`: {e}",
-                        manifest_path.display()
-                    ),
+                    format!("failed to read current working directory: {e}"),
                 )
             })?;
 
-            let graph = corex_core::resolve_manifest(&manifest_content, &context, &fixtures_path)?;
+            let result =
+                corex_core::install_project_frozen(&project_root, &context, &fixtures_path)?;
 
             if json {
-                let output = CliOutput::Success { data: graph };
+                let output = CliOutput::Success { data: result };
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
-                println!("Successfully resolved dependency graph!");
                 println!(
-                    "Root packages:                      {}",
-                    graph.root_nodes.len()
+                    "CI Frozen Install completed for `{}` in {}ms",
+                    result.manifest_name, result.elapsed_ms
                 );
-                println!("Total resolved package instances:   {}", graph.nodes.len());
-                println!("Total dependency links:             {}", graph.edges.len());
+                println!("  Resolved packages: {}", result.resolved_count);
+                Ok(None)
+            }
+        }
+        "lockfile" | "lock" => {
+            let sub = command_args.first().map_or("verify", String::as_str);
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+            let lockfile_path = project_root.join("corex.lock.json");
+
+            match sub {
+                "path" => {
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "path": lockfile_path }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("{}", lockfile_path.display());
+                        Ok(None)
+                    }
+                }
+                "verify" | "status" => {
+                    let lockfile = corex_core::verify_lockfile(&project_root)?;
+                    if json {
+                        let output = CliOutput::Success { data: lockfile };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Lockfile `corex.lock.json` verified cleanly!");
+                        println!("  Version:   {}", lockfile.lockfile_version);
+                        println!("  Packages:  {}", lockfile.packages.len());
+                        Ok(None)
+                    }
+                }
+                _ => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    3,
+                    format!("unknown lockfile subcommand `{sub}`"),
+                )
+                .with_help("supported lockfile subcommands: path, verify, status")),
+            }
+        }
+        "add" => {
+            let pkg_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    "missing package name for `add` command",
+                )
+                .with_help("Usage: corexpm add <package-name> [--dev]")
+            })?;
+
+            let is_dev = command_args.iter().any(|a| a == "--dev" || a == "-D");
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let result = corex_core::add_dependency(
+                &project_root,
+                &context,
+                &fixtures_path,
+                pkg_arg,
+                None,
+                is_dev,
+            )?;
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "Added `{pkg_arg}` and installed project in {}ms",
+                    result.elapsed_ms
+                );
+                Ok(None)
+            }
+        }
+        "remove" => {
+            let pkg_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    "missing package name for `remove` command",
+                )
+                .with_help("Usage: corexpm remove <package-name>")
+            })?;
+
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let result =
+                corex_core::remove_dependency(&project_root, &context, &fixtures_path, pkg_arg)?;
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "Removed `{pkg_arg}` and reconciled project in {}ms",
+                    result.elapsed_ms
+                );
+                Ok(None)
+            }
+        }
+        "list" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let tree = corex_core::list_dependencies(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: tree };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("{}", serde_json::to_string_pretty(&tree).unwrap());
+                Ok(None)
+            }
+        }
+        "trust" => {
+            let sub = command_args.first().map_or("list", String::as_str);
+            let target_pkg = command_args.get(1);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            match sub {
+                "approve" => {
+                    let pkg = target_pkg.ok_or_else(|| {
+                        Diagnostic::new(
+                            ErrorFamily::Cli,
+                            1,
+                            "missing package name for `trust approve`",
+                        )
+                        .with_help("Usage: corexpm trust approve <package-name>")
+                    })?;
+                    corex_core::approve_trust(&project_root, pkg)?;
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "approved": pkg }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Approved dependency script execution for `{pkg}`");
+                        Ok(None)
+                    }
+                }
+                "deny" => {
+                    let pkg = target_pkg.ok_or_else(|| {
+                        Diagnostic::new(
+                            ErrorFamily::Cli,
+                            1,
+                            "missing package name for `trust deny`",
+                        )
+                        .with_help("Usage: corexpm trust deny <package-name>")
+                    })?;
+                    corex_core::deny_trust(&project_root, pkg)?;
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "denied": pkg }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Denied dependency script execution for `{pkg}`");
+                        Ok(None)
+                    }
+                }
+                "list" => {
+                    let store = corex_core::list_trust(&project_root)?;
+                    if json {
+                        let output = CliOutput::Success { data: store };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Trusted Packages:");
+                        for (pkg, decision) in &store.packages {
+                            println!("  {pkg}: {decision:?}");
+                        }
+                        Ok(None)
+                    }
+                }
+                _ => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    3,
+                    format!("unknown trust subcommand `{sub}`"),
+                )
+                .with_help("supported trust subcommands: approve, deny, list")),
+            }
+        }
+        "permissions" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let report =
+                corex_core::get_permissions_report(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: report };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Corex Guard Effective Policy:");
+                for entry in &report.entries {
+                    println!(
+                        "  {:20} => {:?} ({})",
+                        entry.package_name, entry.effective_action, entry.policy_source
+                    );
+                    println!("    {}", entry.explanation);
+                }
+                Ok(None)
+            }
+        }
+        "workspace" | "ws" => {
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let metadata = corex_core::list_workspace_members(&project_root)?;
+
+            if json {
+                let output = CliOutput::Success { data: metadata };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Workspace Root: {}", metadata.root_dir.display());
+                println!("Members ({}):", metadata.packages.len());
+                for (name, pkg) in &metadata.packages {
+                    println!("  {} ({})", name, pkg.relative_path.display());
+                }
+                Ok(None)
+            }
+        }
+        "changed" => {
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let changed_set = corex_core::list_changed_packages(&project_root, None)?;
+
+            if json {
+                let output = CliOutput::Success { data: changed_set };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                if changed_set.is_empty() {
+                    println!("No packages changed.");
+                } else {
+                    for pkg in &changed_set {
+                        println!("{pkg}");
+                    }
+                }
+                Ok(None)
+            }
+        }
+        "run" => {
+            let script_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(ErrorFamily::Cli, 1, "missing script name for `run` command")
+                    .with_help("Usage: corexpm run <script-name>")
+            })?;
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let is_ws_mode = all
+                || changed
+                || affected
+                || !target_workspaces.is_empty()
+                || !include_patterns.is_empty()
+                || !exclude_patterns.is_empty()
+                || corex_core::list_workspace_members(&project_root)
+                    .is_ok_and(|m| !m.packages.is_empty());
+
+            if is_ws_mode {
+                let filter = corex_workspace::WorkspaceFilter {
+                    target_workspaces,
+                    include_patterns,
+                    exclude_patterns,
+                    all,
+                };
+                let options = corex_workspace::TaskSchedulerOptions {
+                    concurrency: concurrency.unwrap_or(4),
+                    fail_fast: fail_fast.unwrap_or(true),
+                };
+
+                let summary = corex_core::run_workspace_script(
+                    &project_root,
+                    script_arg,
+                    &filter,
+                    &options,
+                    changed,
+                    affected,
+                )?;
+
+                if json {
+                    let output = CliOutput::Success { data: summary };
+                    Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                } else {
+                    println!(
+                        "Executed workspace script `{script_arg}` across {} packages ({} succeeded, {} failed, {} skipped)",
+                        summary.total_tasks, summary.successful_tasks, summary.failed_tasks, summary.skipped_tasks
+                    );
+                    for (pkg, res) in &summary.results {
+                        let status = if res.success { "success" } else { "failed" };
+                        println!("  {pkg}: {status}");
+                    }
+                    Ok(None)
+                }
+            } else {
+                let result = corex_core::run_project_script(&project_root, script_arg)?;
+
+                if json {
+                    let output = CliOutput::Success { data: result };
+                    Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                } else {
+                    println!(
+                        "Executed script `{script_arg}` in {}ms (success: {})",
+                        result.duration_ms, result.success
+                    );
+                    if !result.stdout.is_empty() {
+                        println!("{}", result.stdout);
+                    }
+                    if !result.stderr.is_empty() {
+                        eprintln!("{}", result.stderr);
+                    }
+                    Ok(None)
+                }
+            }
+        }
+        "exec" => {
+            let bin_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    "missing binary name for `exec` command",
+                )
+                .with_help("Usage: corexpm exec <binary-name>")
+            })?;
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let bin_path = corex_core::exec_binary(&project_root, bin_arg)?;
+
+            if json {
+                let output = CliOutput::Success {
+                    data: serde_json::json!({
+                        "binary": bin_arg,
+                        "path": bin_path,
+                    }),
+                };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!("Executable binary `{bin_arg}` at: {}", bin_path.display());
                 Ok(None)
             }
         }
@@ -578,6 +1101,145 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(None)
             }
         }
+        "store" => {
+            let subcmd = command_args.first().map_or("status", String::as_str);
+            match subcmd {
+                "path" => {
+                    let path = corex_core::store_path(None);
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "path": path }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("{}", path.display());
+                        Ok(None)
+                    }
+                }
+                "status" | "stats" => {
+                    let stats = corex_core::store_stats(None)?;
+                    if json {
+                        let output = CliOutput::Success { data: stats };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Store path:         {}", stats.store_path.display());
+                        println!("Unique packages:    {}", stats.package_count);
+                        println!("Physical size:      {} bytes", stats.physical_bytes);
+                        println!("Logical referenced: {} bytes", stats.logical_bytes);
+                        println!("Deduplicated saved: {} bytes", stats.saved_bytes);
+                        println!("Registered projects:{}", stats.project_count);
+                        Ok(None)
+                    }
+                }
+                "verify" | "validate" => {
+                    let report = corex_core::store_verify(None)?;
+                    if json {
+                        let output = CliOutput::Success { data: report };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Store Verification Summary:");
+                        println!("  Valid package objects:    {}", report.valid_count);
+                        println!("  Corrupt package objects:  {}", report.corrupt_count);
+                        for detail in &report.corrupt_details {
+                            println!("    - {detail}");
+                        }
+                        Ok(None)
+                    }
+                }
+                "prune" => {
+                    let mut grace_period = 86400u64; // default 24 hours
+                    let mut iter = command_args.iter().skip(1);
+                    while let Some(arg) = iter.next() {
+                        if arg == "--grace-period" {
+                            if let Some(val) = iter.next() {
+                                grace_period = val.parse::<u64>().map_err(|_| {
+                                    Diagnostic::new(
+                                        ErrorFamily::Cli,
+                                        1,
+                                        format!("invalid grace period value: `{val}`"),
+                                    )
+                                })?;
+                            }
+                        } else if let Ok(val) = arg.parse::<u64>() {
+                            grace_period = val;
+                        }
+                    }
+
+                    let summary = corex_core::store_prune(None, grace_period)?;
+                    if json {
+                        let output = CliOutput::Success { data: summary };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Store Prune Summary:");
+                        println!("  Removed packages:  {}", summary.removed_count);
+                        println!("  Reclaimed space:   {} bytes", summary.reclaimed_bytes);
+                        for key in &summary.pruned_keys {
+                            println!("    - Pruned: {key}");
+                        }
+                        Ok(None)
+                    }
+                }
+                other => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    format!("unknown subcommand for `store`: `{other}`"),
+                )
+                .with_help("supported subcommands: path, status, stats, verify, prune")),
+            }
+        }
+        "cache" => {
+            let subcmd = command_args.first().map_or("status", String::as_str);
+            match subcmd {
+                "path" => {
+                    let path = corex_core::cache_path(None);
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "path": path }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("{}", path.display());
+                        Ok(None)
+                    }
+                }
+                "status" => {
+                    let mode = if context.config.offline {
+                        corex_cache::CacheMode::Offline
+                    } else {
+                        corex_cache::CacheMode::Online
+                    };
+                    let status = corex_core::cache_status(None, mode)?;
+                    if json {
+                        let output = CliOutput::Success { data: status };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Cache path:        {}", status.path.display());
+                        println!("Cached metadata:   {} files", status.metadata_count);
+                        println!("Cached tarballs:   {} files", status.tarball_count);
+                        println!("Total size:        {} bytes", status.total_bytes);
+                        Ok(None)
+                    }
+                }
+                "clean" => {
+                    corex_core::cache_clean(None)?;
+                    if json {
+                        let output = CliOutput::Success {
+                            data: serde_json::json!({ "cleaned": true }),
+                        };
+                        Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+                    } else {
+                        println!("Successfully cleaned local cache.");
+                        Ok(None)
+                    }
+                }
+                other => Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    format!("unknown subcommand for `cache`: `{other}`"),
+                )
+                .with_help("supported subcommands: path, status, clean")),
+            }
+        }
         other => Err(Diagnostic::new(
             ErrorFamily::Cli,
             1,
@@ -616,10 +1278,9 @@ mod tests {
         assert!(parse_args(args.into_iter()).is_err());
     }
 
-    #[test]
-    fn test_execute_doctor() {
-        let parsed = ParsedArgs {
-            command: Some("doctor".to_owned()),
+    fn default_test_parsed_args(cmd: &str) -> ParsedArgs {
+        ParsedArgs {
+            command: Some(cmd.to_owned()),
             command_args: Vec::new(),
             json: false,
             linker: None,
@@ -628,26 +1289,69 @@ mod tests {
             help: false,
             version: false,
             fixtures: None,
-        };
+            target_workspaces: Vec::new(),
+            include_patterns: Vec::new(),
+            exclude_patterns: Vec::new(),
+            all: false,
+            changed: false,
+            affected: false,
+            concurrency: None,
+            fail_fast: None,
+        }
+    }
+
+    #[test]
+    fn test_execute_doctor() {
+        let parsed = default_test_parsed_args("doctor");
         let res = execute(parsed).unwrap();
         assert!(res.is_none());
     }
 
     #[test]
     fn test_execute_doctor_json() {
-        let parsed = ParsedArgs {
-            command: Some("doctor".to_owned()),
-            command_args: Vec::new(),
-            json: true,
-            linker: None,
-            scripts: None,
-            offline: None,
-            help: false,
-            version: false,
-            fixtures: None,
-        };
+        let mut parsed = default_test_parsed_args("doctor");
+        parsed.json = true;
         let res = execute(parsed).unwrap().unwrap();
         assert!(res.contains("\"status\": \"success\""));
         assert!(res.contains("\"version\""));
+    }
+
+    #[test]
+    fn test_execute_store_commands() {
+        let mut parsed = default_test_parsed_args("store");
+        parsed.command_args = vec!["status".to_owned()];
+        parsed.json = true;
+        let res = execute(parsed).unwrap().unwrap();
+        assert!(res.contains("\"package_count\""));
+    }
+
+    #[test]
+    fn test_execute_cache_commands() {
+        let mut parsed = default_test_parsed_args("cache");
+        parsed.command_args = vec!["status".to_owned()];
+        parsed.json = true;
+        let res = execute(parsed).unwrap().unwrap();
+        assert!(res.contains("\"metadata_count\""));
+    }
+
+    #[test]
+    fn test_parse_args_workspace_options() {
+        let args = vec![
+            "run".to_owned(),
+            "build".to_owned(),
+            "-w".to_owned(),
+            "@app/web".to_owned(),
+            "--all".to_owned(),
+            "--concurrency".to_owned(),
+            "8".to_owned(),
+            "--no-fail-fast".to_owned(),
+        ];
+        let parsed = parse_args(args.into_iter()).unwrap();
+        assert_eq!(parsed.command.as_deref(), Some("run"));
+        assert_eq!(parsed.command_args, vec!["build".to_owned()]);
+        assert_eq!(parsed.target_workspaces, vec!["@app/web".to_owned()]);
+        assert!(parsed.all);
+        assert_eq!(parsed.concurrency, Some(8));
+        assert_eq!(parsed.fail_fast, Some(false));
     }
 }
