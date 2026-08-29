@@ -96,11 +96,11 @@ and release artifacts have a verifiable supply chain.
 
 ## Phase 8 — migration and compatibility (`0.9`)
 
-- npm, pnpm, Yarn, and Bun lockfile migration where formats permit
-- no automatic deletion of foreign lockfiles
-- broad framework/native/CLI compatibility matrix
-- stable error-code catalog and migration guide
-- performance and disk reports using published methods
+- [x] npm, pnpm, Yarn, and Bun lockfile migration where formats permit
+- [x] no automatic deletion of foreign lockfiles
+- [x] broad framework/native/CLI compatibility matrix
+- [x] stable error-code catalog and migration guide
+- [x] performance and disk reports using published methods
 
 Exit: target projects migrate predictably, incompatibilities are documented,
 and release-candidate telemetry is not required to make compatibility claims.
