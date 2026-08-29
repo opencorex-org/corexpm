@@ -1,0 +1,12 @@
+{
+  "name": "corexpm-monorepo",
+  "version": "0.1.0-dev",
+  "private": true,
+  "description": "CorexPM monorepo root",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces"
+  }
+}
