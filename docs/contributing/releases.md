@@ -1,24 +1,55 @@
-# Release process
+# CorexPM Standard Release Process
 
-CorexPM releases are reproducible native artifacts, not just repository tags.
+CorexPM releases are reproducible native artifacts, signed checksums, and npm ecosystem distribution packages.
 
-## Pre-release checklist
+## Standard Release Execution
 
-1. Confirm roadmap exit criteria and close or defer every release blocker.
-2. Run formatting, linting, unit, integration, compatibility, security, and
-   required platform checks.
-3. Review dependency advisories, licenses, and source provenance.
-4. Update the changelog, version, migration notes, and known limitations.
-5. Build release artifacts in the release workflow from a clean tag.
-6. Produce SHA-256 checksums, signatures, provenance, and an SBOM.
-7. Install and smoke-test each supported artifact independently.
-8. Publish the release and verify download, signature, and rollback guidance.
+CorexPM provides an automated, standard release script [`scripts/release.sh`](../../scripts/release.sh).
 
-Initial target triples are macOS arm64/x64, Linux arm64/x64, and Windows
-arm64/x64, subject to the accepted platform tier policy. Packaging via Homebrew
-or WinGet follows trustworthy signed binary releases.
+### Step 1: Pre-Release Dry Run
 
-Stable releases require documented lockfile/config compatibility and a defined
-security support window. The word `latest` must never be the only reproducible
-installer input.
+Run pre-release validation checks (`cargo fmt`, `clippy`, `cargo test`, `cargo build --release`, `npm pack`, `SHA256SUMS`):
 
+```sh
+./scripts/release.sh --dry-run v1.0.0
+```
+
+### Step 2: Formal Release & Git Tagging
+
+When validation passes and the working tree is clean:
+
+```sh
+./scripts/release.sh v1.0.0
+```
+
+This will:
+1. Validate code formatting, clippy lints, and unit tests.
+2. Compile native release binaries (`target/release/corexpm`).
+3. Package the npm distribution archive (`packages/corexpm/corexpm-1.0.0.tgz`).
+4. Generate release checksums (`SHA256SUMS`).
+5. Create an annotated git release tag `v1.0.0`.
+
+### Step 3: Push Tags & Publish NPM
+
+Push the release commit and tag to GitHub:
+
+```sh
+git push origin main --tags
+```
+
+Publish the npm package to the npm registry:
+
+```sh
+cd packages/corexpm
+npm publish --access public
+```
+
+---
+
+## Supported Target Triples
+
+- `aarch64-apple-darwin` (macOS Apple Silicon)
+- `x86_64-apple-darwin` (macOS Intel)
+- `x86_64-unknown-linux-gnu` (Linux x64)
+- `aarch64-unknown-linux-gnu` (Linux ARM64)
+- `x86_64-pc-windows-msvc` (Windows x64)
