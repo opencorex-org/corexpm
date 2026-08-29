@@ -34,18 +34,42 @@ The current `0.1.0-dev` scaffold provides:
 The first usable milestone is an npm-compatible isolated installer backed by
 Corex CAS. See the [roadmap](docs/roadmap/ROADMAP.md).
 
-## Try the bootstrap CLI
+## Quick Start & Installation
 
-Prerequisites: a recent stable Rust toolchain.
+### Option 1: On-demand with `npx` (Node.js)
+
+```sh
+npx corexpm doctor
+npx corexpm migrate
+```
+
+### Option 2: Global Install via `npm`
+
+```sh
+npm install -g corexpm
+corexpm --help
+```
+
+### Option 3: Universal Shell Installers
+
+**macOS / Linux (POSIX Shell)**:
+```sh
+curl -fsSL https://corex.dev/install.sh | sh
+```
+
+**Windows (PowerShell)**:
+```powershell
+iwr -useb https://corex.dev/install.ps1 | iex
+```
+
+### Option 4: Build from Source (Rust)
+
+Prerequisites: a recent stable Rust toolchain (`>=1.80`).
 
 ```sh
 cargo run -p corex-cli -- --help
-cargo run -p corex-cli -- --version
 cargo run -p corex-cli -- doctor
 ```
-
-The commands listed by `--help` are the planned public interface. Commands not
-implemented yet exit with a clear development-stage error.
 
 ## Architecture
 
