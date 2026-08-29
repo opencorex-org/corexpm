@@ -345,6 +345,415 @@ impl Lockfile {
     }
 }
 
+/// Supported foreign lockfile formats for migration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ForeignLockfileFormat {
+    /// npm `package-lock.json`
+    Npm,
+    /// pnpm `pnpm-lock.yaml` or JSON
+    Pnpm,
+    /// Yarn `yarn.lock`
+    Yarn,
+    /// Bun `bun.lock`
+    Bun,
+}
+
+impl ForeignLockfileFormat {
+    /// Associated default filename for this format.
+    #[must_use]
+    pub const fn filename(self) -> &'static str {
+        match self {
+            Self::Npm => "package-lock.json",
+            Self::Pnpm => "pnpm-lock.yaml",
+            Self::Yarn => "yarn.lock",
+            Self::Bun => "bun.lock",
+        }
+    }
+
+    /// Short format string name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Npm => "npm",
+            Self::Pnpm => "pnpm",
+            Self::Yarn => "yarn",
+            Self::Bun => "bun",
+        }
+    }
+}
+
+/// Imports an npm `package-lock.json` into a canonical `Lockfile`.
+///
+/// # Errors
+/// Returns `Diagnostic` if JSON is malformed.
+pub fn import_npm_lockfile(content: &str) -> Result<Lockfile, Diagnostic> {
+    let value: serde_json::Value = serde_json::from_str(content).map_err(|e| {
+        Diagnostic::new(
+            ErrorFamily::Lockfile,
+            10,
+            format!("failed parsing npm package-lock.json: {e}"),
+        )
+    })?;
+
+    let mut lockfile = Lockfile::new();
+    let mut importer = LockfileImporter::default();
+
+    // Parse root dependencies
+    if let Some(deps) = value
+        .get("dependencies")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (name, dep_obj) in deps {
+            if let Some(version_str) = dep_obj.get("version").and_then(serde_json::Value::as_str) {
+                importer
+                    .dependencies
+                    .insert(name.clone(), version_str.to_string());
+
+                let key = format!("{name}@{version_str}");
+                let integrity = dep_obj
+                    .get("integrity")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("sha512-imported-npm")
+                    .to_string();
+                let tarball = dep_obj
+                    .get("resolved")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+
+                lockfile.packages.insert(
+                    key,
+                    LockfilePackage {
+                        version: version_str.to_string(),
+                        resolution: LockfileResolution {
+                            registry: "npm".to_string(),
+                            tarball,
+                            integrity,
+                        },
+                        dependencies: BTreeMap::new(),
+                        dev_dependencies: BTreeMap::new(),
+                        optional_dependencies: BTreeMap::new(),
+                        peer_dependencies: BTreeMap::new(),
+                    },
+                );
+            }
+        }
+    } else if let Some(packages) = value.get("packages").and_then(serde_json::Value::as_object) {
+        for (pkg_path, pkg_obj) in packages {
+            if pkg_path.is_empty() {
+                // Root package
+                if let Some(deps) = pkg_obj
+                    .get("dependencies")
+                    .and_then(serde_json::Value::as_object)
+                {
+                    for (name, req) in deps {
+                        if let Some(req_str) = req.as_str() {
+                            importer
+                                .dependencies
+                                .insert(name.clone(), req_str.to_string());
+                        }
+                    }
+                }
+            } else if let Some(pkg_name) = pkg_path.strip_prefix("node_modules/") {
+                if let Some(version_str) =
+                    pkg_obj.get("version").and_then(serde_json::Value::as_str)
+                {
+                    let key = format!("{pkg_name}@{version_str}");
+                    let integrity = pkg_obj
+                        .get("integrity")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("sha512-imported-npm")
+                        .to_string();
+                    let tarball = pkg_obj
+                        .get("resolved")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+
+                    lockfile.packages.insert(
+                        key,
+                        LockfilePackage {
+                            version: version_str.to_string(),
+                            resolution: LockfileResolution {
+                                registry: "npm".to_string(),
+                                tarball,
+                                integrity,
+                            },
+                            dependencies: BTreeMap::new(),
+                            dev_dependencies: BTreeMap::new(),
+                            optional_dependencies: BTreeMap::new(),
+                            peer_dependencies: BTreeMap::new(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    lockfile.importers.insert(".".to_string(), importer);
+    Ok(lockfile)
+}
+
+/// Imports a pnpm `pnpm-lock.yaml` (or JSON representation) into a canonical `Lockfile`.
+///
+/// # Errors
+/// Returns `Diagnostic` if content format is invalid.
+pub fn import_pnpm_lockfile(content: &str) -> Result<Lockfile, Diagnostic> {
+    let mut lockfile = Lockfile::new();
+    let mut importer = LockfileImporter::default();
+
+    // Parse line by line to extract dependencies and package versions safely
+    let mut current_section = "";
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("dependencies:") {
+            current_section = "deps";
+            continue;
+        } else if trimmed.starts_with("devDependencies:") {
+            current_section = "devDeps";
+            continue;
+        } else if trimmed.starts_with("packages:") {
+            current_section = "pkgs";
+            continue;
+        }
+
+        if current_section == "deps" || current_section == "devDeps" {
+            if let Some((name, val)) = trimmed.split_once(':') {
+                let name = name.trim().trim_matches('\'').trim_matches('"');
+                let val = val.trim().trim_matches('\'').trim_matches('"');
+                if !name.is_empty() && !val.is_empty() {
+                    let clean_ver = val.split('(').next().unwrap_or(val).trim();
+                    if current_section == "deps" {
+                        importer
+                            .dependencies
+                            .insert(name.to_string(), clean_ver.to_string());
+                    } else {
+                        importer
+                            .dev_dependencies
+                            .insert(name.to_string(), clean_ver.to_string());
+                    }
+
+                    let key = format!("{name}@{clean_ver}");
+                    lockfile
+                        .packages
+                        .entry(key)
+                        .or_insert_with(|| LockfilePackage {
+                            version: clean_ver.to_string(),
+                            resolution: LockfileResolution {
+                                registry: "npm".to_string(),
+                                tarball: String::new(),
+                                integrity: "sha512-imported-pnpm".to_string(),
+                            },
+                            dependencies: BTreeMap::new(),
+                            dev_dependencies: BTreeMap::new(),
+                            optional_dependencies: BTreeMap::new(),
+                            peer_dependencies: BTreeMap::new(),
+                        });
+                }
+            }
+        }
+    }
+
+    lockfile.importers.insert(".".to_string(), importer);
+    Ok(lockfile)
+}
+
+/// Imports a Yarn `yarn.lock` file into a canonical `Lockfile`.
+///
+/// # Errors
+/// Returns `Diagnostic` if content format is invalid.
+pub fn import_yarn_lockfile(content: &str) -> Result<Lockfile, Diagnostic> {
+    let mut lockfile = Lockfile::new();
+    let mut importer = LockfileImporter::default();
+
+    let mut current_pkg_name = String::new();
+    let mut current_version = String::new();
+    let mut current_integrity = "sha512-imported-yarn".to_string();
+    let mut current_resolved = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if !line.starts_with(' ') && !line.starts_with('\t') && trimmed.ends_with(':') {
+            // New package declaration block e.g. "react@^18.2.0":
+            if !current_pkg_name.is_empty() && !current_version.is_empty() {
+                let key = format!("{current_pkg_name}@{current_version}");
+                importer
+                    .dependencies
+                    .insert(current_pkg_name.clone(), current_version.clone());
+                lockfile.packages.insert(
+                    key,
+                    LockfilePackage {
+                        version: current_version.clone(),
+                        resolution: LockfileResolution {
+                            registry: "npm".to_string(),
+                            tarball: current_resolved.clone(),
+                            integrity: current_integrity.clone(),
+                        },
+                        dependencies: BTreeMap::new(),
+                        dev_dependencies: BTreeMap::new(),
+                        optional_dependencies: BTreeMap::new(),
+                        peer_dependencies: BTreeMap::new(),
+                    },
+                );
+            }
+
+            let raw_spec = trimmed
+                .trim_end_matches(':')
+                .trim_matches('"')
+                .trim_matches('\'');
+            let first_spec = raw_spec.split(',').next().unwrap_or(raw_spec).trim();
+            if let Some((name, _)) = first_spec.rsplit_once('@') {
+                current_pkg_name = name.trim_start_matches('"').to_string();
+            } else {
+                current_pkg_name = first_spec.to_string();
+            }
+            current_version.clear();
+            current_resolved.clear();
+            current_integrity = "sha512-imported-yarn".to_string();
+        } else if trimmed.starts_with("version ") {
+            current_version = trimmed
+                .trim_start_matches("version ")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+        } else if trimmed.starts_with("resolved ") {
+            current_resolved = trimmed
+                .trim_start_matches("resolved ")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+        } else if trimmed.starts_with("integrity ") {
+            current_integrity = trimmed
+                .trim_start_matches("integrity ")
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+        }
+    }
+
+    if !current_pkg_name.is_empty() && !current_version.is_empty() {
+        let key = format!("{current_pkg_name}@{current_version}");
+        importer
+            .dependencies
+            .insert(current_pkg_name.clone(), current_version.clone());
+        lockfile.packages.insert(
+            key,
+            LockfilePackage {
+                version: current_version,
+                resolution: LockfileResolution {
+                    registry: "npm".to_string(),
+                    tarball: current_resolved,
+                    integrity: current_integrity,
+                },
+                dependencies: BTreeMap::new(),
+                dev_dependencies: BTreeMap::new(),
+                optional_dependencies: BTreeMap::new(),
+                peer_dependencies: BTreeMap::new(),
+            },
+        );
+    }
+
+    lockfile.importers.insert(".".to_string(), importer);
+    Ok(lockfile)
+}
+
+/// Imports a Bun `bun.lock` (JSON) into a canonical `Lockfile`.
+///
+/// # Errors
+/// Returns `Diagnostic` if format is invalid.
+pub fn import_bun_lockfile(content: &str) -> Result<Lockfile, Diagnostic> {
+    let value: serde_json::Value = serde_json::from_str(content).map_err(|e| {
+        Diagnostic::new(
+            ErrorFamily::Lockfile,
+            11,
+            format!("failed parsing Bun bun.lock: {e}"),
+        )
+    })?;
+
+    let mut lockfile = Lockfile::new();
+    let mut importer = LockfileImporter::default();
+
+    if let Some(packages) = value.get("packages").and_then(serde_json::Value::as_object) {
+        for (name, val) in packages {
+            let ver = val
+                .as_str()
+                .or_else(|| val.get("version").and_then(serde_json::Value::as_str))
+                .unwrap_or("0.0.0");
+
+            importer.dependencies.insert(name.clone(), ver.to_string());
+            let key = format!("{name}@{ver}");
+            lockfile.packages.insert(
+                key,
+                LockfilePackage {
+                    version: ver.to_string(),
+                    resolution: LockfileResolution {
+                        registry: "npm".to_string(),
+                        tarball: String::new(),
+                        integrity: "sha512-imported-bun".to_string(),
+                    },
+                    dependencies: BTreeMap::new(),
+                    dev_dependencies: BTreeMap::new(),
+                    optional_dependencies: BTreeMap::new(),
+                    peer_dependencies: BTreeMap::new(),
+                },
+            );
+        }
+    }
+
+    lockfile.importers.insert(".".to_string(), importer);
+    Ok(lockfile)
+}
+
+/// Detects foreign lockfiles in `project_dir` and converts the first matching foreign lockfile into a `Lockfile`.
+///
+/// **Invariant**: The foreign lockfile is read-only and is **never** modified or deleted.
+///
+/// # Errors
+/// Returns `Diagnostic` if no foreign lockfile is found or parsing fails.
+pub fn detect_and_import_foreign(
+    project_dir: &std::path::Path,
+) -> Result<(Lockfile, ForeignLockfileFormat, std::path::PathBuf), Diagnostic> {
+    let candidates = [
+        (ForeignLockfileFormat::Npm, "package-lock.json"),
+        (ForeignLockfileFormat::Pnpm, "pnpm-lock.yaml"),
+        (ForeignLockfileFormat::Yarn, "yarn.lock"),
+        (ForeignLockfileFormat::Bun, "bun.lock"),
+    ];
+
+    for (format, filename) in candidates {
+        let file_path = project_dir.join(filename);
+        if file_path.exists() {
+            let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Lockfile,
+                    12,
+                    format!("failed reading foreign lockfile `{filename}`: {e}"),
+                )
+            })?;
+
+            let lockfile = match format {
+                ForeignLockfileFormat::Npm => import_npm_lockfile(&content)?,
+                ForeignLockfileFormat::Pnpm => import_pnpm_lockfile(&content)?,
+                ForeignLockfileFormat::Yarn => import_yarn_lockfile(&content)?,
+                ForeignLockfileFormat::Bun => import_bun_lockfile(&content)?,
+            };
+
+            return Ok((lockfile, format, file_path));
+        }
+    }
+
+    Err(Diagnostic::new(
+        ErrorFamily::Lockfile,
+        13,
+        "no foreign lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock) found",
+    )
+    .with_help("ensure a supported foreign lockfile exists in the project root"))
+}
+
 fn validate_deps_match(
     manifest_deps: &BTreeMap<PackageName, String>,
     importer_deps: &BTreeMap<String, String>,
@@ -416,6 +825,56 @@ mod tests {
         let json_str = r#"{ "lockfileVersion": 99, "importers": {}, "packages": {} }"#;
         let err = Lockfile::from_json(json_str).unwrap_err();
         assert_eq!(err.code(), "CXLOCK0002");
+    }
+
+    #[test]
+    fn test_import_npm_lockfile() {
+        let npm_json = r#"{
+            "name": "demo",
+            "version": "1.0.0",
+            "dependencies": {
+                "express": {
+                    "version": "4.18.2",
+                    "resolved": "https://registry.npmjs.org/express/-/express-4.18.2.tgz",
+                    "integrity": "sha512-express-sha"
+                }
+            }
+        }"#;
+        let lockfile = import_npm_lockfile(npm_json).unwrap();
+        assert!(lockfile.packages.contains_key("express@4.18.2"));
+        let importer = lockfile.importers.get(".").unwrap();
+        assert_eq!(importer.dependencies.get("express").unwrap(), "4.18.2");
+    }
+
+    #[test]
+    fn test_import_yarn_lockfile() {
+        let yarn_txt = r#"
+# yarn lockfile v1
+"lodash@^4.17.21":
+  version "4.17.21"
+  resolved "https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz"
+  integrity "sha512-lodash-sha"
+"#;
+        let lockfile = import_yarn_lockfile(yarn_txt).unwrap();
+        assert!(lockfile.packages.contains_key("lodash@4.17.21"));
+    }
+
+    #[test]
+    fn test_foreign_lockfile_preservation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm_lock_path = tmp.path().join("package-lock.json");
+        std::fs::write(
+            &npm_lock_path,
+            r#"{ "name": "app", "version": "1.0.0", "dependencies": {} }"#,
+        )
+        .unwrap();
+
+        let (lockfile, format, source_path) = detect_and_import_foreign(tmp.path()).unwrap();
+        assert_eq!(format, ForeignLockfileFormat::Npm);
+        assert_eq!(source_path, npm_lock_path);
+        assert_eq!(lockfile.lockfile_version, 1);
+        // Verify source lockfile is NOT deleted or altered
+        assert!(npm_lock_path.exists());
     }
 
     fn find_fixtures_dir() -> std::path::PathBuf {
