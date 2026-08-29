@@ -1,0 +1,73 @@
+name: NPM Release & Multi-Platform Publishing
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-binaries:
+    name: Build Native Binaries
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_name: corexpm-darwin-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: corexpm-darwin-arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_name: corexpm-linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            asset_name: corexpm-linux-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: corexpm-windows-x64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Binary
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: target/${{ matrix.target }}/release/corexpm*
+
+  publish-npm:
+    name: Publish NPM Package
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: packages/corexpm/vendor
+
+      - name: Verify Package SDK
+        run: |
+          cd packages/corexpm
+          npm test
+
+      - name: Publish to NPM
+        run: |
+          cd packages/corexpm
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
