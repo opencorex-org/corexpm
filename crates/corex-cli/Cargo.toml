@@ -24,12 +24,14 @@ corex-store = { path = "../corex-store" }
 corex-workspace = { path = "../corex-workspace" }
 corex-audit = { path = "../corex-audit" }
 corex-security = { path = "../corex-security" }
+corex-installer = { path = "../corex-installer" }
+indicatif = { workspace = true }
+console = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
+tempfile = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 
 [lints]
 workspace = true
