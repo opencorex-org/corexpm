@@ -181,9 +181,7 @@ impl InstallerService {
         // 3. Resolve Graph or Reconstruct from Lockfile
         let (client, is_http): (Box<dyn corex_registry::RegistryClient>, bool) = if fixtures_dir
             .exists()
-            && fs::read_dir(fixtures_dir)
-                .map(|mut d| d.next().is_some())
-                .unwrap_or(false)
+            && fs::read_dir(fixtures_dir).is_ok_and(|mut d| d.next().is_some())
         {
             (
                 Box::new(corex_registry::MockRegistryClient::new(fixtures_dir)),
