@@ -54,7 +54,7 @@ hex = "0.4"
 fs2 = "0.4"
 tempfile = "3.10"
 # Real HTTP client — sync, no runtime needed, TLS via native-tls
-ureq = { version = "2.10", features = ["native-tls"] }
+ureq = { version = "3.4", features = ["native-tls"] }
 # Rich terminal progress bars and spinners
 indicatif = "0.17"
 # Terminal colors with NO_COLOR support
