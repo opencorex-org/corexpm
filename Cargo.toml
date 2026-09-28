@@ -58,7 +58,7 @@ ureq = { version = "2.10", features = ["native-tls"] }
 # Rich terminal progress bars and spinners
 indicatif = "0.17"
 # Terminal colors with NO_COLOR support
-console = "0.15"
+console = "0.16"
 
 
 
