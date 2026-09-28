@@ -704,9 +704,9 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "js-semver"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a86e374f16219dbd32d4044d3b27200c2064043e40f0e6d4aa7fa7b047c5958"
+checksum = "022d2577accd01e7b1e65fd0545007bbc23b27840431977ef9931637c51c4842"
 
 [[package]]
 name = "js-sys"
