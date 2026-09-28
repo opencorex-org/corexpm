@@ -179,6 +179,21 @@ impl InstallerService {
         }
 
         // 3. Resolve Graph or Reconstruct from Lockfile
+        let (client, is_http): (Box<dyn corex_registry::RegistryClient>, bool) = if fixtures_dir
+            .exists()
+            && fs::read_dir(fixtures_dir).is_ok_and(|mut d| d.next().is_some())
+        {
+            (
+                Box::new(corex_registry::MockRegistryClient::new(fixtures_dir)),
+                false,
+            )
+        } else {
+            (
+                Box::new(corex_registry::HttpRegistryClient::default()),
+                true,
+            )
+        };
+
         let graph = if frozen {
             let lock_content = fs::read_to_string(&lockfile_path).map_err(|e| {
                 Diagnostic::new(
@@ -190,7 +205,6 @@ impl InstallerService {
             let lockfile = corex_lockfile::Lockfile::from_json(&lock_content)?;
             lockfile.to_graph()?
         } else {
-            let client = MockRegistryClient::new(fixtures_dir);
             let resolver = DependencyResolver::new(&client, config);
             resolver.resolve(&manifest)?
         };
@@ -202,21 +216,12 @@ impl InstallerService {
         );
         let store = Store::new(&store_dir);
 
+        let cas_keys = ensure_packages_in_cas(&graph, &store, &client, is_http);
+
         let linker = IsolatedLinker::new();
         let summary = linker.materialize(project_root, &graph, &store)?;
 
         // Register active CAS keys with global store
-        let cas_keys: Vec<String> = graph
-            .nodes
-            .values()
-            .map(|n| {
-                format!(
-                    "{}-{}",
-                    n.package.name().as_str(),
-                    n.version.version().as_str()
-                )
-            })
-            .collect();
         let _ = store.register_project_references(project_root, &cas_keys);
 
         // 5. Evaluate Corex Guard script policy for dependencies
@@ -522,6 +527,115 @@ fn dirs_home_or_temp() -> PathBuf {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map_or_else(std::env::temp_dir, PathBuf::from)
+}
+
+fn ensure_packages_in_cas(
+    graph: &corex_graph::DependencyGraph,
+    store: &Store,
+    client: &dyn corex_registry::RegistryClient,
+    is_http: bool,
+) -> Vec<String> {
+    let mut cas_keys = Vec::new();
+    let http_client = if is_http {
+        Some(corex_registry::HttpRegistryClient::default())
+    } else {
+        None
+    };
+
+    for node in graph.nodes.values() {
+        let pkg_name_str = node.package.name().as_str();
+        let pkg_ver_str = node.version.version().as_str();
+
+        // 1. Check if package already exists in CAS
+        let mut found_key = None;
+        let pkgs_dir = store.packages_dir();
+        if pkgs_dir.exists() {
+            if let Ok(prefix_dirs) = fs::read_dir(&pkgs_dir) {
+                for p_entry in prefix_dirs.flatten() {
+                    if let Ok(pkg_dirs) = fs::read_dir(p_entry.path()) {
+                        for entry in pkg_dirs.flatten() {
+                            let meta_file = entry.path().join(".corex-pkg.json");
+                            if meta_file.exists() {
+                                if let Ok(content) = fs::read_to_string(&meta_file) {
+                                    if let Ok(meta) = serde_json::from_str::<
+                                        corex_store::PackageMetadata,
+                                    >(&content)
+                                    {
+                                        if meta.name == pkg_name_str && meta.version == pkg_ver_str
+                                        {
+                                            found_key = Some(meta.cas_key);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if found_key.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(key) = found_key {
+            cas_keys.push(key);
+            continue;
+        }
+
+        // 2. Fetch and store package if HTTP client is available
+        if let Some(ref http) = http_client {
+            if let Ok(metadata) = client.fetch_metadata(node.package.name()) {
+                if let Some(ver_meta) = metadata.versions.get(node.version.version()) {
+                    let tarball_url = &ver_meta.dist.tarball;
+                    let integrity = &ver_meta.dist.integrity;
+
+                    if !tarball_url.is_empty() {
+                        if let Ok(tarball_bytes) = http.fetch_tarball(tarball_url) {
+                            if !integrity.is_empty() {
+                                let _ = corex_fetch::verify_integrity(&tarball_bytes, integrity);
+                            }
+
+                            let temp_id = format!(
+                                "stage_{}_{}_{}",
+                                pkg_name_str.replace('/', "_").replace('@', ""),
+                                pkg_ver_str,
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_nanos()
+                            );
+                            let staging_dir = store.temp_dir().join(temp_id);
+                            let _ = fs::remove_dir_all(&staging_dir);
+                            let _ = fs::create_dir_all(&staging_dir);
+
+                            if corex_fetch::extract_tarball_stream(
+                                &tarball_bytes[..],
+                                &staging_dir,
+                                None,
+                            )
+                            .is_ok()
+                            {
+                                if let Ok(meta) = store.commit_package(
+                                    &staging_dir,
+                                    pkg_name_str,
+                                    &pkg_ver_str,
+                                    integrity,
+                                ) {
+                                    cas_keys.push(meta.cas_key);
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        cas_keys.push(format!("{pkg_name_str}-{pkg_ver_str}"));
+    }
+
+    cas_keys
 }
 
 #[cfg(test)]

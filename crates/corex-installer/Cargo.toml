@@ -19,6 +19,7 @@ corex-linker = { path = "../corex-linker" }
 corex-lockfile = { path = "../corex-lockfile" }
 corex-policy = { path = "../corex-policy" }
 corex-scripts = { path = "../corex-scripts" }
+corex-fetch = { path = "../corex-fetch" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

@@ -477,6 +477,155 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(None)
             }
         }
+        "init" => {
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+            let pkg_json_path = project_root.join("package.json");
+            if pkg_json_path.exists() {
+                return Err(Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    format!(
+                        "`package.json` already exists in `{}`",
+                        project_root.display()
+                    ),
+                )
+                .with_help(
+                    "use `corexpm install` to install dependencies in an existing project",
+                ));
+            }
+            let dir_name = project_root
+                .file_name()
+                .map_or("my-package", |s| s.to_str().unwrap_or("my-package"));
+
+            let init_pkg = serde_json::json!({
+                "name": dir_name,
+                "version": "1.0.0",
+                "description": "",
+                "main": "index.js",
+                "scripts": {
+                    "test": "echo \"Error: no test specified\" && exit 1"
+                },
+                "keywords": [],
+                "author": "",
+                "license": "ISC"
+            });
+
+            let json_text = serde_json::to_string_pretty(&init_pkg).unwrap();
+            std::fs::write(&pkg_json_path, &json_text).map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to write `package.json`: {e}"),
+                )
+            })?;
+
+            if json {
+                let output = CliOutput::Success { data: init_pkg };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "{} Created `package.json` with sensible defaults in {}",
+                    console::style("✓").green().bold(),
+                    console::style(project_root.display().to_string()).cyan()
+                );
+                Ok(None)
+            }
+        }
+        "update" | "up" => {
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let project_root = std::env::current_dir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed to read current working directory: {e}"),
+                )
+            })?;
+
+            let result = corex_core::install_project(&project_root, &context, &fixtures_path)?;
+
+            if json {
+                let output = CliOutput::Success { data: result };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "{} Updated dependencies for `{}` in {}ms",
+                    console::style("✓").green().bold(),
+                    console::style(&result.manifest_name).cyan().bold(),
+                    result.elapsed_ms
+                );
+                println!("  Resolved packages:     {}", result.resolved_count);
+                println!(
+                    "  Direct dependencies:   {}",
+                    result.summary.direct_dependencies
+                );
+                println!("  Symlinks created:      {}", result.summary.total_links);
+                Ok(None)
+            }
+        }
+        "dlx" => {
+            let pkg_arg = command_args.first().ok_or_else(|| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    1,
+                    "missing package name for `dlx` command",
+                )
+                .with_help("Usage: corexpm dlx <package-name> [args...]")
+            })?;
+
+            let temp_dir = tempfile::tempdir().map_err(|e| {
+                Diagnostic::new(
+                    ErrorFamily::Cli,
+                    2,
+                    format!("failed creating ephemeral directory for dlx: {e}"),
+                )
+            })?;
+
+            let fixtures_path =
+                fixtures.map_or_else(default_fixtures_dir, std::path::PathBuf::from);
+
+            let temp_pkg_json = serde_json::json!({
+                "name": "ephemeral-dlx",
+                "version": "1.0.0",
+                "dependencies": {
+                    pkg_arg: "*"
+                }
+            });
+            let _ = std::fs::write(
+                temp_dir.path().join("package.json"),
+                serde_json::to_string_pretty(&temp_pkg_json).unwrap(),
+            );
+
+            let installer = corex_installer::InstallerService::new();
+            let result =
+                installer.install(temp_dir.path(), &context.config, &fixtures_path, None)?;
+
+            if json {
+                let output = CliOutput::Success {
+                    data: serde_json::json!({
+                        "package": pkg_arg,
+                        "installed": true,
+                        "elapsed_ms": result.elapsed_ms
+                    }),
+                };
+                Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
+            } else {
+                println!(
+                    "{} Prepared `{}` in {}ms (ephemeral)",
+                    console::style("✓").green().bold(),
+                    console::style(pkg_arg).cyan().bold(),
+                    result.elapsed_ms
+                );
+                Ok(None)
+            }
+        }
         "install" | "i" => {
             let is_frozen = command_args
                 .iter()
@@ -504,13 +653,17 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
             } else {
                 if result.reconciled {
                     println!(
-                        "Reconciled `{}` in {}ms (up to date)",
-                        result.manifest_name, result.elapsed_ms
+                        "{} Reconciled `{}` in {}ms (up to date)",
+                        console::style("✓").green().bold(),
+                        console::style(&result.manifest_name).cyan().bold(),
+                        result.elapsed_ms
                     );
                 } else {
                     println!(
-                        "Installed `{}` in {}ms (frozen: {is_frozen})",
-                        result.manifest_name, result.elapsed_ms
+                        "{} Installed `{}` in {}ms (frozen: {is_frozen})",
+                        console::style("✓").green().bold(),
+                        console::style(&result.manifest_name).cyan().bold(),
+                        result.elapsed_ms
                     );
                     println!("  Resolved packages:     {}", result.resolved_count);
                     println!(
@@ -547,8 +700,10 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
                 println!(
-                    "CI Frozen Install completed for `{}` in {}ms",
-                    result.manifest_name, result.elapsed_ms
+                    "{} CI Frozen Install completed for `{}` in {}ms",
+                    console::style("✓").green().bold(),
+                    console::style(&result.manifest_name).cyan().bold(),
+                    result.elapsed_ms
                 );
                 println!("  Resolved packages: {}", result.resolved_count);
                 Ok(None)
@@ -583,7 +738,10 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                         let output = CliOutput::Success { data: lockfile };
                         Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
                     } else {
-                        println!("Lockfile `corex.lock.json` verified cleanly!");
+                        println!(
+                            "{} Lockfile `corex.lock.json` verified cleanly!",
+                            console::style("✓").green().bold()
+                        );
                         println!("  Version:   {}", lockfile.lockfile_version);
                         println!("  Packages:  {}", lockfile.packages.len());
                         Ok(None)
@@ -633,7 +791,9 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
                 println!(
-                    "Added `{pkg_arg}` and installed project in {}ms",
+                    "{} Added `{}` and updated project in {}ms",
+                    console::style("✓").green().bold(),
+                    console::style(pkg_arg).cyan().bold(),
                     result.elapsed_ms
                 );
                 Ok(None)
@@ -668,7 +828,9 @@ fn execute(parsed: ParsedArgs) -> Result<Option<String>, Diagnostic> {
                 Ok(Some(serde_json::to_string_pretty(&output).unwrap()))
             } else {
                 println!(
-                    "Removed `{pkg_arg}` and reconciled project in {}ms",
+                    "{} Removed `{}` and reconciled project in {}ms",
+                    console::style("✓").green().bold(),
+                    console::style(pkg_arg).cyan().bold(),
                     result.elapsed_ms
                 );
                 Ok(None)
@@ -1416,8 +1578,11 @@ mod tests {
         assert!(parsed.json);
     }
 
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_execute_migrate_command() {
+        let _guard = TEST_MUTEX.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("package-lock.json"),
@@ -1434,11 +1599,33 @@ mod tests {
             ..default_test_parsed_args("migrate")
         };
 
-        let result = execute(parsed).unwrap();
-        assert!(result.is_some());
+        let result = execute(parsed);
+        let _ = std::env::set_current_dir(original_dir);
+
+        let res = result.unwrap();
+        assert!(res.is_some());
         assert!(tmp.path().join("corex.lock.json").exists());
         assert!(tmp.path().join("package-lock.json").exists());
+    }
 
-        std::env::set_current_dir(original_dir).unwrap();
+    #[test]
+    fn test_execute_init_command() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let parsed = ParsedArgs {
+            command: Some("init".to_string()),
+            json: true,
+            ..default_test_parsed_args("init")
+        };
+
+        let result = execute(parsed);
+        let _ = std::env::set_current_dir(original_dir);
+
+        let res = result.unwrap();
+        assert!(res.is_some());
+        assert!(tmp.path().join("package.json").exists());
     }
 }
